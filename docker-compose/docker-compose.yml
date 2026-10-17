@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # 1. SFTP 模擬伺服器 (Port: 2222, 帳密: tester / password)
+  sftp-server:
+    image: atmoz/sftp:latest
+    container_name: mock-sftp-server
+    ports:
+      - "2222:22"
+    command: tester:password:1001:::upload
+    volumes:
+      - ./docker-data/sftp:/home/tester/upload
+
+  # 2. FTP 模擬伺服器 (Port: 2121, 被動通道埠: 21100-21110, 帳密: tester / password)
+  ftp-server:
+    image: stilliard/pure-ftpd:latest
+    container_name: mock-ftp-server
+    ports:
+      - "2121:21"
+      - "21100-21110:21100-21110"
+    environment:
+      - PUBLICHOST=127.0.0.1
+      - FTP_USER_NAME=tester
+      - FTP_USER_PASS=password
+      - FTP_USER_HOME=/home/tester
+      - FTP_PASSIVE_PORTS=21100:21110
+      - TLS=0
+    volumes:
+      - ./docker-data/ftp:/home/tester
+
+  # 3. FTPS (TLS Explicit) 模擬伺服器 (Port: 2122, 被動通道埠: 21120-21130, 帳密: tester / password)
+   # 3. FTPS (TLS Explicit) 模擬伺服器
+  ftps-server:
+    image: stilliard/pure-ftpd:latest
+    container_name: mock-ftps-server
+    ports:
+      - "2122:21"
+      - "21120-21130:21120-21130"
+    environment:
+      - PUBLICHOST=127.0.0.1
+      - FTP_USER_NAME=tester
+      - FTP_USER_PASS=password
+      - FTP_USER_HOME=/home/tester
+      - FTP_PASSIVE_PORTS=21120:21130
+      - ADDED_FLAGS=--tls=1 -d -d       # 關鍵 1：必須傳入 --tls=1 給 pure-ftpd 啟用 TLS
+      - TLS_CN=localhost                # 關鍵 2：自動生成自簽憑證必要參數
+      - TLS_ORG=Test                    # 關鍵 3：自動生成自簽憑證必要參數
+      - TLS_C=TW                        # 關鍵 4：自動生成自簽憑證必要參數
+      - TLS_USE_DSAPRAM=true            # 關鍵 5：加速啟動時 DH 密鑰生成
+    volumes:
+      - ./docker-data/ftps:/home/tester
+
+  # 4. 統一檔案管理視覺化 Web UI (FileBrowser - Port: 8088)
+  # 開箱即用：統一掛載三台伺服器的實體儲存目錄，免登入直接視覺化預覽、檢視、拖拉上傳與檔案對帳
+  file-manager-ui:
+    image: filebrowser/filebrowser:latest
+    container_name: mock-file-manager-ui
+    ports:
+      - "8088:80"
+    command: ["--noauth", "-r", "/srv"]
+    volumes:
+      - ./docker-data:/srv
+    depends_on:
+      - sftp-server
+      - ftp-server
+      - ftps-server
+
+  # 5. Microsoft SQL Server 2022 (Port: 1433, 帳號: sa / 密碼: Root@123456)
+  mssql-server:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mock-mssql-server
+    user: root
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=Root@123456
+      - MSSQL_PID=Developer
+    volumes:
+      - mssql-data:/var/opt/mssql/data
+
+volumes:
+  mssql-data:

@@ -1,0 +1,6 @@
+{
+  "system": "FileTransmissionModule",
+  "version": "0.0.1",
+  "testSuite": "DirectorySyncTest",
+  "status": "READY"
+}
