@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -59,6 +60,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      */
     @Override
     public boolean supports(TransmissionProtocol protocol) {
+        // 比對傳輸協定列舉，本元件專責處理標準明文 FTP (File Transfer Protocol) 傳輸連線
         return TransmissionProtocol.FTP == protocol;
     }
 
@@ -77,21 +79,29 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      */
     @Override
     public void upload(TransmissionServerConfig config, LocalFilePath localFilePath, RemoteFilePath remotePath, String filename) {
+        // 透過樣板模式統一管理 FTPClient 連線生命週期，確保 Socket 資源用畢自動關閉
         executeWithFtp(config, ftpClient -> {
             try {
+                // 步驟 1：防禦性檢查並確保遠端目標目錄結構存在，若不存在則沿途徑逐層建立
                 ensureRemoteDirectoryExists(ftpClient, remotePath.getValue());
+
+                // 步驟 2：組合遠端目標檔案之完整路徑
                 String targetFilePath = remotePath.getValue() + "/" + filename;
 
                 File localFile = localFilePath.toFile();
+                // 步驟 3：使用 Try-with-resources 宣告檔案輸入串流，確保串流必於傳輸結束後安全關閉，根除本機檔案鎖定問題
                 try (InputStream inputStream = new FileInputStream(localFile)) {
+                    // 步驟 4：透過 FTPClient.storeFile 傳送 STOR 指令以二進位串流寫入遠端伺服器
                     boolean success = ftpClient.storeFile(targetFilePath, inputStream);
                     if (!success) {
+                        // 上傳失敗時取得 FTP 回應碼 (如 550 Permission Denied, 552 Exceeded Storage Allocation)
                         throw new FileTransmissionException("FTP 檔案存入失敗 (ReplyCode: " + ftpClient.getReplyCode() + ")");
                     }
                     log.info("[FTP] 上傳檔案成功: {} -> {}", localFilePath.getValue(), targetFilePath);
                 }
                 return null;
             } catch (IOException e) {
+                // 步驟 5：將底層網路中斷或磁碟 I/O 異常轉譯為統一的傳輸業務例外
                 log.error("[FTP] 上傳檔案發生異常: {}", e.getMessage(), e);
                 throw new FileTransmissionException("FTP 上傳異常: " + e.getMessage(), e);
             }
@@ -112,8 +122,10 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      */
     @Override
     public void download(TransmissionServerConfig config, RemoteFilePath remoteFilePath, LocalFilePath savedPath) {
+        // 透過樣板方法調用 FTPClient 連線回呼
         executeWithFtp(config, ftpClient -> {
             try {
+                // 步驟 1：檢查本機目標儲存檔案所在之父層目錄結構，若不存在則主動建立
                 File localTarget = savedPath.toFile();
                 File parentDir = localTarget.getParentFile();
                 if (parentDir != null && !parentDir.exists()) {
@@ -123,15 +135,19 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
                     }
                 }
 
+                // 步驟 2：使用 Try-with-resources 開啟本地檔案輸出串流
                 try (OutputStream outputStream = new FileOutputStream(localTarget)) {
+                    // 步驟 3：透過 FTPClient.retrieveFile 傳送 RETR 指令下載遠端檔案至本機輸出串流
                     boolean success = ftpClient.retrieveFile(remoteFilePath.getValue(), outputStream);
                     if (!success) {
+                        // 下載失敗時獲取伺服器回應碼 (如 550 File not found)
                         throw new FileTransmissionException("FTP 檔案下載失敗 (ReplyCode: " + ftpClient.getReplyCode() + ")");
                     }
                     log.info("[FTP] 檔案下載成功: {} -> {}", remoteFilePath.getValue(), savedPath.getValue());
                 }
                 return null;
             } catch (IOException e) {
+                // 步驟 4：捕捉並包裝 I/O 例外為業務異常
                 log.error("[FTP] 下載檔案發生異常: {}", e.getMessage(), e);
                 throw new FileTransmissionException("FTP 下載異常: " + e.getMessage(), e);
             }
@@ -158,9 +174,12 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             boolean deleteRemoteExtras
     ) {
         return executeWithFtp(config, ftpClient -> {
+            // 依據同步傳輸方向列舉進行調度：
             if (direction == SyncDirection.LOCAL_TO_REMOTE) {
+                // 方向 A：本機目錄 -> 遠端 FTP 目錄 (支援增量上傳與遠端孤兒檔案清理)
                 return syncLocalToRemoteInternal(ftpClient, localDir.toFile(), remoteDir.getValue(), deleteRemoteExtras);
             } else {
+                // 方向 B：遠端 FTP 目錄 -> 本機目錄 (比對時間戳記增量下載)
                 return syncRemoteToLocalInternal(ftpClient, remoteDir.getValue(), localDir.toFile());
             }
         });
@@ -179,13 +198,16 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
         return executeWithFtp(config, ftpClient -> {
             List<RemoteFileInfo> result = new ArrayList<>();
             try {
+                // 步驟 1：向遠端發送 LIST 指令獲取目錄下的 FTPFile 項目清單
                 FTPFile[] ftpFiles = ftpClient.listFiles(remotePath.getValue());
                 if (ftpFiles != null) {
                     for (FTPFile file : ftpFiles) {
                         String name = file.getName();
+                        // 步驟 2：過濾當前目錄 "." 與父層目錄 ".."，防止路徑解析遞迴死循環
                         if (".".equals(name) || "..".equals(name)) {
                             continue;
                         }
+                        // 步驟 3：封裝為不可變的領域元資料物件 RemoteFileInfo
                         RemoteFilePath itemPath = remotePath.resolve(name);
                         long timestamp = (file.getTimestamp() != null) ? file.getTimestamp().getTimeInMillis() : 0L;
                         result.add(new RemoteFileInfo(
@@ -216,6 +238,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
     public boolean deleteFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
         return executeWithFtp(config, ftpClient -> {
             try {
+                // 發送 DELE 指令執行遠端檔案刪除
                 boolean deleted = ftpClient.deleteFile(remoteFilePath.getValue());
                 log.info("[FTP] 刪除遠端檔案: {} 結果: {}", remoteFilePath.getValue(), deleted);
                 return deleted;
@@ -237,6 +260,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
     public boolean deleteDirectory(TransmissionServerConfig config, RemoteFilePath remoteDirectoryPath) {
         return executeWithFtp(config, ftpClient -> {
             try {
+                // 深度優先搜尋 (DFS) 逐層清空目錄內部節點後再移除最外層目錄
                 deleteRemoteDirectoryRecursively(ftpClient, remoteDirectoryPath.getValue());
                 return true;
             } catch (IOException e) {
@@ -255,6 +279,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
     @Override
     public boolean testConnection(TransmissionServerConfig config) {
         try {
+            // 透過 executeWithFtp 驗證建立 TCP Socket、發送認證與登出全流程
             executeWithFtp(config, ftpClient -> true);
             return true;
         } catch (Exception e) {
@@ -281,16 +306,21 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             String remoteDirPath,
             boolean deleteRemoteExtras
     ) throws IOException {
+        // 步驟 1：防禦性驗證本機來源路徑是否存在且為有效目錄
         if (!localDirectory.exists() || !localDirectory.isDirectory()) {
             throw new IllegalArgumentException("本機路徑非有效目錄: " + localDirectory.getAbsolutePath());
         }
 
+        // 步驟 2：確保遠端目標目錄結構存在，若不存在則沿路徑逐層遞迴建立
         ensureRemoteDirectoryExists(ftpClient, remoteDirPath);
+
+        // 步驟 3：列舉本機目錄下的所有子檔案與子目錄清單，若為空目錄直接結束
         File[] localFiles = localDirectory.listFiles();
         if (localFiles == null) {
             return 0;
         }
 
+        // 步驟 4：查詢遠端目錄現存檔案清單，建立檔名集合快取作為增量比對基準
         FTPFile[] remoteFiles = ftpClient.listFiles(remoteDirPath);
         Set<String> remoteFileNames = new HashSet<>();
         if (remoteFiles != null) {
@@ -300,12 +330,15 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
         }
 
         int count = 0;
+        // 步驟 5：走訪本機檔案項目，進行遞迴同步或檔案上傳
         for (File localFile : localFiles) {
             String name = localFile.getName();
             if (localFile.isDirectory()) {
+                // 子目錄：組合遠端對應子目錄路徑，遞迴深度同步
                 String subRemote = remoteDirPath + "/" + name;
                 count += syncLocalToRemoteInternal(ftpClient, localFile, subRemote, deleteRemoteExtras);
             } else {
+                // 一般檔案：增量檢查，若遠端尚未存在同名檔案才執行上傳
                 if (!remoteFileNames.contains(name)) {
                     String targetFilePath = remoteDirPath + "/" + name;
                     try (InputStream is = new FileInputStream(localFile)) {
@@ -317,18 +350,23 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             }
         }
 
+        // 步驟 6：依配置比對並清理遠端多餘孤兒檔案 (本機已不存在但遠端仍殘留的檔案/目錄)
         if (deleteRemoteExtras && remoteFiles != null) {
             Set<String> localNames = new HashSet<>(Arrays.asList(localDirectory.list()));
             for (FTPFile remoteFile : remoteFiles) {
                 String name = remoteFile.getName();
+                // 略過特殊目錄符號 "." 與 ".."
                 if (".".equals(name) || "..".equals(name)) {
                     continue;
                 }
+                // 若遠端檔案名稱不存在於本機目錄清單中，予以清理
                 if (!localNames.contains(name)) {
                     String remotePath = remoteDirPath + "/" + name;
                     if (remoteFile.isDirectory()) {
+                        // 遞迴清空並刪除遠端多餘子目錄
                         deleteRemoteDirectoryRecursively(ftpClient, remotePath);
                     } else {
+                        // 刪除遠端多餘單一檔案
                         ftpClient.deleteFile(remotePath);
                         log.warn("[FTP] 刪除遠端多餘檔案: {}", remotePath);
                     }
@@ -353,6 +391,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             String remoteDirPath,
             File localDirectory
     ) throws IOException {
+        // 步驟 1：確保本機目標目錄結構存在，若不存在則主動建立父子層目錄
         if (!localDirectory.exists()) {
             boolean created = localDirectory.mkdirs();
             if (!created) {
@@ -361,13 +400,16 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
         }
 
         int count = 0;
+        // 步驟 2：查詢遠端來源目錄下的所有檔案與子目錄清單
         FTPFile[] remoteFiles = ftpClient.listFiles(remoteDirPath);
         if (remoteFiles == null) {
             return 0;
         }
 
+        // 步驟 3：走訪遠端各項目，進行增量下載或遞迴目錄處理
         for (FTPFile remoteFile : remoteFiles) {
             String name = remoteFile.getName();
+            // 略過 "." 與 ".."
             if (".".equals(name) || "..".equals(name)) {
                 continue;
             }
@@ -376,12 +418,16 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             File subLocalFile = new File(localDirectory, name);
 
             if (remoteFile.isDirectory()) {
+                // 遇到目錄：遞迴走訪同步子目錄
                 count += syncRemoteToLocalInternal(ftpClient, subRemotePath, subLocalFile);
             } else {
+                // 遇到檔案：比對時間戳記進行增量下載
                 long remoteTime = (remoteFile.getTimestamp() != null) ? remoteFile.getTimestamp().getTimeInMillis() : 0L;
+                // 若本機檔案不存在，或本機檔案修改時間早於遠端檔案 (遠端有新版本)，則執行下載
                 if (!subLocalFile.exists() || subLocalFile.lastModified() < remoteTime) {
                     try (OutputStream os = new FileOutputStream(subLocalFile)) {
                         ftpClient.retrieveFile(subRemotePath, os);
+                        // 下載完成後將本機檔案修改時間同步為遠端檔案時間，確保後續增量比對精準
                         if (remoteTime > 0) {
                             subLocalFile.setLastModified(remoteTime);
                         }
@@ -403,6 +449,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      * @throws IOException 當切換或建立目錄失敗時拋出
      */
     private void ensureRemoteDirectoryExists(FTPClient ftpClient, String remotePath) throws IOException {
+        // 步驟 1：依據正斜線 "/" 切割路徑元素，準備逐層向下檢查與建立
         String[] pathElements = remotePath.split("/");
         StringBuilder currentPath = new StringBuilder();
 
@@ -413,11 +460,14 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             currentPath.append("/").append(folder);
             String directory = currentPath.toString();
 
+            // 步驟 2：嘗試切換工作目錄至該層級 (CWD 指令)
             if (!ftpClient.changeWorkingDirectory(directory)) {
+                // 切換失敗代表該層目錄尚未建立，發送 MKD 指令建立目錄
                 boolean created = ftpClient.makeDirectory(directory);
                 if (!created) {
                     throw new RemoteDirectoryCreationException("FTP 無法建立遠端目錄: " + directory);
                 }
+                // 建立後切換進入，確保後續下層目錄可在此基礎上順利銜接
                 ftpClient.changeWorkingDirectory(directory);
                 log.info("[FTP] 建立遠端目錄成功: {}", directory);
             }
@@ -432,6 +482,7 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      * @throws IOException 當檔案或目錄刪除失敗時拋出
      */
     private void deleteRemoteDirectoryRecursively(FTPClient ftpClient, String remoteDir) throws IOException {
+        // 步驟 1：列舉遠端目標目錄下的所有檔案與子項目
         FTPFile[] remoteFiles = ftpClient.listFiles(remoteDir);
         if (remoteFiles != null) {
             for (FTPFile remoteFile : remoteFiles) {
@@ -440,13 +491,17 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
                     continue;
                 }
                 String subPath = remoteDir + "/" + name;
+                // 步驟 2：深度優先走訪 (DFS)
                 if (remoteFile.isDirectory()) {
+                    // 若為子目錄，先遞迴清空該子目錄內部所有內容
                     deleteRemoteDirectoryRecursively(ftpClient, subPath);
                 } else {
+                    // 若為檔案，直接發送 DELE 指令刪除
                     ftpClient.deleteFile(subPath);
                 }
             }
         }
+        // 步驟 3：目錄內部所有子項目全數清空後，發送 RMD 指令移除空目錄本身
         ftpClient.removeDirectory(remoteDir);
         log.warn("[FTP] 刪除遠端目錄成功: {}", remoteDir);
     }
@@ -460,36 +515,59 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
      * @throws TransmissionConnectionException 當伺服器拒絕連線或帳號密碼登入失敗時拋出
      */
     protected FTPClient createAndConnectClient(TransmissionServerConfig config) throws IOException {
+        // 步驟 1：實例化標準 FTPClient
         FTPClient ftpClient = new FTPClient();
+
+        // 步驟 2：配置編碼與逾時參數
+        // 強制控制通道使用 UTF-8 編碼，防止中文檔名或特殊路徑在指令解析時出現亂碼
         ftpClient.setControlEncoding(StandardCharsets.UTF_8.name());
+
+        // 設定 TCP Socket 連線逾時 (毫秒)
         ftpClient.setConnectTimeout(config.getTimeoutMs());
-        ftpClient.setDataTimeout(config.getTimeoutMs());
+
+        // 設定資料通道 (Data Channel) 讀取與傳輸 Socket 逾時 (使用 Duration 避免過時方法警告)
+        ftpClient.setDataTimeout(Duration.ofMillis(config.getTimeoutMs()));
+
+        // 設定控制通道 (Control Channel) 指令與回應接收之預設逾時 (毫秒)
         ftpClient.setDefaultTimeout(config.getTimeoutMs());
+
+        // 將底層 I/O 緩衝區擴增為 1MB (1024 * 1024 bytes)，提高檔案傳輸吞吐量
         ftpClient.setBufferSize(1024 * 1024);
 
+        // 步驟 3：向遠端伺服器發起 TCP 連線建立
         ftpClient.connect(config.getHost(), config.getPort());
 
+        // 步驟 4：校驗伺服器初始回應碼 (ReplyCode)
+        // 2xx 代表 Positive Completion (如 220 Service ready for new user)，非 2xx 則判定為連線被拒
         int replyCode = ftpClient.getReplyCode();
         if (!FTPReply.isPositiveCompletion(replyCode)) {
             ftpClient.disconnect();
             throw new TransmissionConnectionException("FTP 伺服器拒絕連線 (ReplyCode: " + replyCode + ")");
         }
 
+        // 步驟 5：傳送帳號密碼執行身分驗證 (LOGIN)
         boolean loginSuccess = ftpClient.login(config.getUsername(), config.getPassword());
         if (!loginSuccess) {
+            // 驗證失敗立即中斷 Socket，防止殘留未認證連線
             ftpClient.disconnect();
             throw new TransmissionConnectionException("FTP 登入失敗: 帳號或密碼錯誤 (user=" + config.getUsername() + ")");
         }
 
-        // 依配置設定被動模式 (Passive Mode) 或主動模式 (Active Mode)
+        // 步驟 6：依據配置切換傳輸通道模式 (被動模式 Passive vs 主動模式 Active)
+        // 被動模式由伺服器開啟資料通道通訊埠讓客戶端連入，為穿透防火牆與 NAT 之業界標準建議模式
         if (config.isPassiveMode()) {
             ftpClient.enterLocalPassiveMode();
         } else {
             ftpClient.enterLocalActiveMode();
         }
 
-        // 強制設定為二進位檔案模式，避免傳輸格式錯亂
+        // 步驟 7：強制設定為二進位檔案傳輸模式 (Binary Mode)
+        // 避免預設的 ASCII 模式因換行符號 (\r\n) 轉換而破壞非純文字檔案
         ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+
+        log.info("[FTP] 連線與身分驗證成功: {}:{} (passiveMode={})",
+                config.getHost(), config.getPort(), config.isPassiveMode());
+
         return ftpClient;
     }
 
@@ -506,15 +584,21 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
     private <T> T executeWithFtp(TransmissionServerConfig config, FtpCallback<T> callback) {
         FTPClient ftpClient = null;
         try {
+            // 步驟 1：建立連線、身分驗證與通道設定
             ftpClient = createAndConnectClient(config);
+
+            // 步驟 2：執行業務操作回呼
             return callback.doInFtp(ftpClient);
         } catch (IOException e) {
+            // 步驟 3：例外轉譯 - 將底層 Socket 網路中斷轉為連線例外
             log.error("[FTP] 連線或傳輸發生異常: {}", e.getMessage(), e);
             throw new TransmissionConnectionException("FTP 操作失敗: " + e.getMessage(), e);
         } catch (Exception e) {
+            // 步驟 4：例外轉譯 - 將傳輸業務邏輯例外轉為統一傳輸業務例外
             log.error("[FTP] 執行操作時發生異常: {}", e.getMessage(), e);
             throw new FileTransmissionException("FTP 操作執行失敗: " + e.getMessage(), e);
         } finally {
+            // 步驟 5：資源釋放保證 - 於 finally 區塊強制登出並關閉 Socket，杜絕連線資源洩漏
             if (ftpClient != null && ftpClient.isConnected()) {
                 try {
                     ftpClient.logout();

@@ -141,6 +141,7 @@ public class FileTransmissionCommandService implements
                         ? command.filename().trim()
                         : localFile.getFileName();
 
+                // 上傳本機檔案至遠端伺服器指定目錄
                 fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), fileName);
                 fileTransmissionTrackerPort.recordUploadSuccess(trackingId, localFile, command.remotePath(), fileName, fileSize);
             } catch (Exception ex) {
