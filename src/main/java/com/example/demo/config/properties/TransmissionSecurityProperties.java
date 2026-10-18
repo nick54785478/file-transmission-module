@@ -26,10 +26,6 @@ public class TransmissionSecurityProperties {
 
     /**
      * AES-GCM 傳輸機密加密金鑰 (支援任意長度，底層透過 SHA-256 自動衍生為 128-bit 金鑰)
-     * -- GETTER --
-     *  取得目前配置之加密金鑰
-     *
-     * @return 金鑰字串
      */
     private String secretKey = DEFAULT_DEV_KEY;
 

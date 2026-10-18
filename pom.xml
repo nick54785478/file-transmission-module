@@ -56,11 +56,6 @@
 		</dependency>
 
 		<!-- Protocols: SFTP (JSch) & FTP/FTPS (commons-net) -->
-<!--		<dependency>-->
-<!--			<groupId>com.github.mwiede</groupId>-->
-<!--			<artifactId>jsch</artifactId>-->
-<!--			<version>0.2.21</version>-->
-<!--		</dependency>-->
 		<dependency>
 			<groupId>com.github.mwiede</groupId>
 			<artifactId>jsch</artifactId>
