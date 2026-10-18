@@ -44,6 +44,11 @@ public class FileTransmissionGatewayAdapter implements FileTransmissionGatewayPo
     }
 
     @Override
+    public void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename) {
+        clientFactory.getClient(config.getProtocol()).uploadFromMemory(config, content, remotePath, filename);
+    }
+
+    @Override
     public void download(TransmissionServerConfig config, RemoteFilePath remoteFilePath, LocalFilePath savedPath) {
         clientFactory.getClient(config.getProtocol()).download(config, remoteFilePath, savedPath);
     }
@@ -78,5 +83,29 @@ public class FileTransmissionGatewayAdapter implements FileTransmissionGatewayPo
     @Override
     public boolean testConnection(TransmissionServerConfig config) {
         return clientFactory.getClient(config.getProtocol()).testConnection(config);
+    }
+
+    /**
+     * 檢查遠端伺服器上是否存在指定檔案
+     *
+     * @param config 伺服器連線配置
+     * @param remoteFilePath 欲檢查的遠端檔案路徑
+     * @return 若檔案存在且為一般檔案回傳 true，否則回傳 false
+     */
+    @Override
+    public boolean existsFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
+        return clientFactory.getClient(config.getProtocol()).existsFile(config, remoteFilePath);
+    }
+
+    /**
+     * 移動或重新命名遠端伺服器上的檔案 (可用於歷史版本備份與歸檔)
+     *
+     * @param config 伺服器連線配置
+     * @param sourcePath 來源檔案路徑
+     * @param targetPath 目標檔案路徑
+     */
+    @Override
+    public void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath) {
+        clientFactory.getClient(config.getProtocol()).moveFile(config, sourcePath, targetPath);
     }
 }

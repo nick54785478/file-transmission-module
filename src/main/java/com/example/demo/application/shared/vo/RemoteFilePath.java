@@ -1,6 +1,8 @@
 package com.example.demo.application.shared.vo;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * 遠端檔案路徑數值物件 (RemoteFilePath - Value Object Record)
@@ -69,6 +71,34 @@ public record RemoteFilePath(String value) implements Serializable {
     }
 
     /**
+     * 取得檔案的主名稱 (不包含副檔名)
+     *
+     * @return 檔案主名稱
+     */
+    public String getBaseName() {
+        String filename = getFileName();
+        int dotIndex = filename.lastIndexOf('.');
+        if (dotIndex > 0) {
+            return filename.substring(0, dotIndex);
+        }
+        return filename;
+    }
+
+    /**
+     * 取得檔案的副檔名 (含小數點，例如 ".txt"，若無副檔名則回傳空字串)
+     *
+     * @return 副檔名字串
+     */
+    public String getExtension() {
+        String filename = getFileName();
+        int dotIndex = filename.lastIndexOf('.');
+        if (dotIndex > 0) {
+            return filename.substring(dotIndex);
+        }
+        return "";
+    }
+
+    /**
      * 取得上層目錄路徑物件，若已是根目錄則回傳 "/"
      *
      * @return 上層目錄路徑 RemoteFilePath 物件
@@ -81,6 +111,41 @@ public record RemoteFilePath(String value) implements Serializable {
             return new RemoteFilePath("/");
         }
         return new RemoteFilePath("/");
+    }
+
+    /**
+     * 產生此目標路徑的歷史歸檔備份路徑 (方案 A: 最新版維護原名，舊版本加時間戳記與 .bak 備份)
+     * <p>
+     * 範例：{@code /upload/report.txt} 轉換為 {@code /upload/report_20261018_173000.bak}
+     * </p>
+     *
+     * @return 歷史歸檔備份之 RemoteFilePath 物件
+     */
+    public RemoteFilePath toBackupPath() {
+        return toBackupPath(LocalDateTime.now());
+    }
+
+    /**
+     * 產生指定時間點的歷史歸檔備份路徑 (格式: baseName_yyyyMMdd_HHmmss.bak)
+     *
+     * @param timestamp 備份時間點
+     * @return 歷史歸檔備份之 RemoteFilePath 物件
+     */
+    public RemoteFilePath toBackupPath(LocalDateTime timestamp) {
+        return toBackupPath(timestamp, "yyyyMMdd_HHmmss");
+    }
+
+    /**
+     * 產生指定時間點與格式的歷史歸檔備份路徑
+     *
+     * @param timestamp 備份時間點
+     * @param pattern 時間格式字串 (例如 "yyyyMMdd_HHmmss")
+     * @return 歷史歸檔備份之 RemoteFilePath 物件
+     */
+    public RemoteFilePath toBackupPath(LocalDateTime timestamp, String pattern) {
+        String timeStr = timestamp.format(DateTimeFormatter.ofPattern(pattern));
+        String backupFilename = getBaseName() + "_" + timeStr + ".bak";
+        return getParent().resolve(backupFilename);
     }
 
     /**

@@ -34,6 +34,16 @@ public interface FileTransmissionGatewayPort {
     void upload(TransmissionServerConfig config, LocalFilePath localFilePath, RemoteFilePath remotePath, String filename);
 
     /**
+     * 將記憶體內的檔案位元組資料直接上傳至遠端伺服器指定目錄 (零磁碟 I/O)
+     *
+     * @param config 伺服器連線配置
+     * @param content 檔案位元組資料
+     * @param remotePath 遠端目標目錄
+     * @param filename 遠端目標檔案名稱
+     */
+    void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename);
+
+    /**
      * 從遠端伺服器下載檔案至本機指定路徑
      *
      * @param config 伺服器連線配置
@@ -86,6 +96,24 @@ public interface FileTransmissionGatewayPort {
      * @return 是否成功刪除
      */
     boolean deleteDirectory(TransmissionServerConfig config, RemoteFilePath remoteDirectoryPath);
+
+    /**
+     * 檢查遠端伺服器上是否存在指定檔案
+     *
+     * @param config 伺服器連線配置
+     * @param remoteFilePath 欲檢查的遠端檔案路徑
+     * @return 若檔案存在且為一般檔案回傳 true，否則回傳 false
+     */
+    boolean existsFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath);
+
+    /**
+     * 移動或重新命名遠端伺服器上的檔案 (可用於歷史版本備份與歸檔)
+     *
+     * @param config 伺服器連線配置
+     * @param sourcePath 來源檔案路徑
+     * @param targetPath 目標檔案路徑
+     */
+    void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath);
 
     /**
      * 測試與伺服器之連線與帳密認證有效性

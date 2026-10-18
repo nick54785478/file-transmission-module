@@ -71,7 +71,7 @@ public class FileTransmissionTrackerAdapter implements FileTransmissionTrackerPo
     ) {
         TransmissionSessionEntity session = getOrFallback(trackingId);
         session.recordUploadSuccess(
-                sourcePath != null ? sourcePath.value() : null,
+                sourcePath != null ? sourcePath.value() : "<memory>",
                 targetPath != null ? targetPath.value() : null,
                 fileName,
                 fileSizeBytes

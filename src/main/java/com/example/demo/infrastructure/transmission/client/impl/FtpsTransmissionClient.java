@@ -1,6 +1,7 @@
 package com.example.demo.infrastructure.transmission.client.impl;
 
 import com.example.demo.application.shared.exception.TransmissionConnectionException;
+import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.TransmissionProtocol;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
 import java.io.IOException;
@@ -41,6 +42,23 @@ public class FtpsTransmissionClient extends FtpTransmissionClient {
     public boolean supports(TransmissionProtocol protocol) {
         // 比對傳輸協定列舉，本元件專責處理 FTPS (FTP over SSL/TLS) 安全加密連線
         return TransmissionProtocol.FTPS == protocol;
+    }
+
+    /**
+     * 將記憶體內的檔案位元組資料直接上傳至遠端 FTPS 伺服器指定目錄 (以 TLS 加密通道傳輸，零磁碟落盤)
+     * <p>
+     * 複用父類別 {@link FtpTransmissionClient#uploadFromMemory(TransmissionServerConfig, byte[], RemoteFilePath, String)} 邏輯，
+     * 並透過覆寫的 {@link #createAndConnectClient(TransmissionServerConfig)} 自動在 TLS + PROT P 加密保護下傳輸。
+     * </p>
+     *
+     * @param config 傳輸伺服器連線配置模型
+     * @param content 記憶體檔案位元組內容
+     * @param remotePath 遠端目標目錄路徑模型
+     * @param filename 儲存於遠端之檔案名稱
+     */
+    @Override
+    public void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename) {
+        super.uploadFromMemory(config, content, remotePath, filename);
     }
 
     /**

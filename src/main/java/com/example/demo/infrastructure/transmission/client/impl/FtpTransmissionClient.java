@@ -9,6 +9,7 @@ import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
 import com.example.demo.application.shared.vo.TransmissionProtocol;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import com.example.demo.infrastructure.transmission.client.TransmissionProtocolClient;
@@ -103,6 +105,53 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             } catch (IOException e) {
                 // 步驟 5：將底層網路中斷或磁碟 I/O 異常轉譯為統一的傳輸業務例外
                 log.error("[FTP] 上傳檔案發生異常: {}", e.getMessage(), e);
+                throw new FileTransmissionException("FTP 上傳異常: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * 將記憶體內的檔案位元組資料直接上傳至遠端 FTP 伺服器指定目錄 (零磁碟落盤)
+     * <p>
+     * <b>運作流程：</b>
+     * <ol>
+     *   <li>自動確認遠端目標目錄是否存在（若無則遞迴建立）。</li>
+     *   <li>將記憶體中的 {@code byte[]} 封裝為 {@link ByteArrayInputStream}。</li>
+     *   <li>透過 {@link FTPClient#storeFile(String, InputStream)} 以二進位串流直接傳輸寫入遠端，完全不需在本地產生任何實體暫存檔案。</li>
+     * </ol>
+     * </p>
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param content 記憶體檔案位元組內容
+     * @param remotePath 遠端目標目錄路徑模型
+     * @param filename 儲存於遠端之檔案名稱
+     * @throws FileTransmissionException 當檔案存入失敗或 I/O 發生異常時拋出
+     * @throws TransmissionConnectionException 當遠端連線建立或驗證失敗時拋出
+     */
+    @Override
+    public void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename) {
+        Objects.requireNonNull(content, "記憶體檔案內容 content 不能為空");
+        // 透過樣板模式統一管理 FTPClient 連線生命週期，確保 Socket 資源用畢自動關閉
+        executeWithFtp(config, ftpClient -> {
+            try {
+                // 步驟 1：防禦性檢查並確保遠端目標目錄結構存在
+                ensureRemoteDirectoryExists(ftpClient, remotePath.getValue());
+
+                // 步驟 2：組合遠端目標檔案之完整路徑
+                String targetFilePath = remotePath.getValue() + "/" + filename;
+
+                // 步驟 3：透過 ByteArrayInputStream 直接讀取記憶體位元組，避免本地磁碟 I/O 開銷與暫存檔殘留
+                try (InputStream inputStream = new ByteArrayInputStream(content)) {
+                    // 步驟 4：透過 FTPClient.storeFile 傳送 STOR 指令寫入遠端伺服器
+                    boolean success = ftpClient.storeFile(targetFilePath, inputStream);
+                    if (!success) {
+                        throw new FileTransmissionException("FTP 記憶體檔案存入失敗 (ReplyCode: " + ftpClient.getReplyCode() + ")");
+                    }
+                    log.info("[FTP] 記憶體檔案上傳成功: size={} bytes -> {}", content.length, targetFilePath);
+                }
+                return null;
+            } catch (IOException e) {
+                log.error("[FTP] 記憶體檔案上傳發生異常: {}", e.getMessage(), e);
                 throw new FileTransmissionException("FTP 上傳異常: " + e.getMessage(), e);
             }
         });
@@ -286,6 +335,62 @@ public class FtpTransmissionClient implements TransmissionProtocolClient {
             log.warn("[FTP] 測試連線失敗: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 檢查遠端 FTP 伺服器上是否存在指定檔案
+     *
+     * @param config 傳輸伺服器連線配置模型
+     * @param remoteFilePath 欲檢查的遠端檔案路徑模型
+     * @return 若檔案存在且為一般檔案回傳 {@code true}，否則回傳 {@code false}
+     */
+    @Override
+    public boolean existsFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
+        return executeWithFtp(config, ftpClient -> {
+            try {
+                FTPFile[] files = ftpClient.listFiles(remoteFilePath.getValue());
+                if (files != null && files.length == 1) {
+                    return files[0].isFile();
+                }
+                if (files != null && files.length > 1) {
+                    for (FTPFile file : files) {
+                        if (file.getName().equals(remoteFilePath.getFileName()) && file.isFile()) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            } catch (IOException e) {
+                log.warn("[FTP] 檢查遠端檔案是否存在異常: {}", e.getMessage());
+                return false;
+            }
+        });
+    }
+
+    /**
+     * 移動或重新命名遠端 FTP 伺服器上的檔案 (可用於歷史版本備份與歸檔)
+     *
+     * @param config 傳輸伺服器連線配置模型
+     * @param sourcePath 來源檔案路徑模型
+     * @param targetPath 目標檔案路徑模型
+     * @throws FileTransmissionException 當檔案移動或重新命名失敗時拋出
+     */
+    @Override
+    public void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath) {
+        executeWithFtp(config, ftpClient -> {
+            try {
+                ensureRemoteDirectoryExists(ftpClient, targetPath.getParent().getValue());
+                boolean success = ftpClient.rename(sourcePath.getValue(), targetPath.getValue());
+                if (!success) {
+                    throw new FileTransmissionException("FTP 檔案移動/重新命名失敗 (ReplyCode: " + ftpClient.getReplyCode() + ")");
+                }
+                log.info("[FTP] 遠端檔案移動/重命名成功: {} -> {}", sourcePath.getValue(), targetPath.getValue());
+                return null;
+            } catch (IOException e) {
+                log.error("[FTP] 移動/重新命名檔案發生異常: {}", e.getMessage(), e);
+                throw new FileTransmissionException("FTP 檔案移動/重命名異常: " + e.getMessage(), e);
+            }
+        });
     }
 
     // ================================= 內部輔助與重構邏輯 =================================

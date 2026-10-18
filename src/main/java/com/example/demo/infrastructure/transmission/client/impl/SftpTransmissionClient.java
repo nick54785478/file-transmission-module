@@ -20,6 +20,7 @@ import com.jcraft.jsch.SftpException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -29,6 +30,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Vector;
 
@@ -98,6 +100,51 @@ public class SftpTransmissionClient implements TransmissionProtocolClient {
             } catch (SftpException | IOException e) {
                 // 步驟 5：將底層 SFTP 協定異常 (如權限不足、配額超額) 或磁碟 I/O 異常轉譯為領域業務例外
                 log.error("[SFTP] 檔案上傳發生異常: {}", e.getMessage(), e);
+                throw new FileTransmissionException("SFTP 上傳失敗: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * 將記憶體內的檔案位元組資料直接上傳至遠端 SFTP 伺服器指定目錄 (零磁碟落盤)
+     * <p>
+     * <b>運作流程：</b>
+     * <ol>
+     *   <li>自動確認遠端目標目錄是否存在（若無則遞迴建立）並切換進入該目錄。</li>
+     *   <li>將記憶體中的 {@code byte[]} 封裝為 {@link ByteArrayInputStream}。</li>
+     *   <li>透過 {@link ChannelSftp#put(InputStream, String)} 以 SSH 加密串流直接傳輸寫入遠端，完全不需在本地產生任何實體暫存檔案。</li>
+     * </ol>
+     * </p>
+     *
+     * @param config        傳輸伺服器連線配置
+     * @param content       記憶體檔案位元組內容
+     * @param remotePath    遠端目標目錄路徑模型
+     * @param filename      儲存於遠端之檔案名稱
+     * @throws FileTransmissionException       當檔案上傳失敗或 I/O 發生異常時拋出
+     * @throws TransmissionConnectionException 當 SSH 連線建立或認證失敗時拋出
+     */
+    @Override
+    public void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename) {
+        Objects.requireNonNull(content, "記憶體檔案內容 content 不能為空");
+        // 透過樣板方法建立獨立隔離的 SSH Session 與 ChannelSftp，確保執行緒安全並保證連線自動釋放
+        executeWithSftp(config, sftp -> {
+            try {
+                // 步驟 1：防禦性檢查並確保遠端目標目錄結構存在，若不存在則沿途徑逐層建立
+                ensureRemoteDirectoryExists(sftp, remotePath.getValue());
+
+                // 步驟 2：切換至遠端目標工作目錄 (CD 指令)
+                sftp.cd(remotePath.getValue());
+
+                // 步驟 3：透過 ByteArrayInputStream 直接讀取記憶體位元組，推送到 SSH 加密通道
+                try (InputStream inputStream = new ByteArrayInputStream(content)) {
+                    // 步驟 4：透過 ChannelSftp.put 以串流方式寫入遠端伺服器 (檔名已於目標目錄下)
+                    sftp.put(inputStream, filename);
+                    log.info("[SFTP] 記憶體檔案上傳成功: size={} bytes -> {}/{}",
+                            content.length, remotePath.getValue(), filename);
+                }
+                return null;
+            } catch (SftpException | IOException e) {
+                log.error("[SFTP] 記憶體檔案上傳發生異常: {}", e.getMessage(), e);
                 throw new FileTransmissionException("SFTP 上傳失敗: " + e.getMessage(), e);
             }
         });
@@ -275,6 +322,46 @@ public class SftpTransmissionClient implements TransmissionProtocolClient {
             log.warn("[SFTP] 測試連線失敗: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 檢查遠端 SFTP 伺服器上是否存在指定檔案
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param remoteFilePath 欲檢查的遠端檔案路徑模型
+     * @return 若檔案存在且非目錄回傳 true，否則回傳 false
+     */
+    @Override
+    public boolean existsFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
+        return executeWithSftp(config, sftp -> {
+            try {
+                SftpATTRS attrs = sftp.stat(remoteFilePath.getValue());
+                return attrs != null && !attrs.isDir();
+            } catch (SftpException e) {
+                return false;
+            }
+        });
+    }
+
+    /**
+     * 移動或重新命名遠端 SFTP 伺服器上的檔案 (可用於歷史版本備份與歸檔)
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param sourcePath 來源檔案路徑
+     * @param targetPath 目標檔案路徑
+     */
+    @Override
+    public void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath) {
+        executeWithSftp(config, sftp -> {
+            try {
+                ensureRemoteDirectoryExists(sftp, targetPath.getParent().getValue());
+                sftp.rename(sourcePath.getValue(), targetPath.getValue());
+                log.info("[SFTP] 遠端檔案移動/重命名成功: {} -> {}", sourcePath.getValue(), targetPath.getValue());
+                return null;
+            } catch (SftpException e) {
+                throw new FileTransmissionException("SFTP 檔案移動/重新命名失敗: " + e.getMessage(), e);
+            }
+        });
     }
 
     // ================================= 內部輔助與重構邏輯 =================================

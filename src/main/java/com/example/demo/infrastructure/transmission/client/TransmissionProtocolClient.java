@@ -31,6 +31,16 @@ public interface TransmissionProtocolClient {
     void upload(TransmissionServerConfig config, LocalFilePath localFilePath, RemoteFilePath remotePath, String filename);
 
     /**
+     * 將記憶體內的檔案位元組資料直接上傳至遠端伺服器指定目錄 (零磁碟 I/O)
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param content 檔案位元組資料
+     * @param remotePath 遠端目標目錄路徑
+     * @param filename 儲存於遠端之檔案名稱
+     */
+    void uploadFromMemory(TransmissionServerConfig config, byte[] content, RemoteFilePath remotePath, String filename);
+
+    /**
      * 下載檔案
      */
     void download(TransmissionServerConfig config, RemoteFilePath remoteFilePath, LocalFilePath savedPath);
@@ -60,6 +70,16 @@ public interface TransmissionProtocolClient {
      * 遞迴刪除遠端目錄
      */
     boolean deleteDirectory(TransmissionServerConfig config, RemoteFilePath remoteDirectoryPath);
+
+    /**
+     * 檢查遠端檔案是否存在
+     */
+    boolean existsFile(TransmissionServerConfig config, RemoteFilePath remoteFilePath);
+
+    /**
+     * 移動或重新命名遠端檔案
+     */
+    void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath);
 
     /**
      * 測試連線

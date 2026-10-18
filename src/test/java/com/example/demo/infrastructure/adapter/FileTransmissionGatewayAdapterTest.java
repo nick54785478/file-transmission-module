@@ -68,6 +68,24 @@ class FileTransmissionGatewayAdapterTest {
 
     /**
      * Feature: 檔案傳輸閘道操作委派
+     * Scenario: 呼叫 upload (記憶體位元組) 時正確委派至工廠解析之客戶端
+     * Given: 準備連線配置、記憶體 byte 陣列與遠端目錄
+     * When: 呼叫 adapter.upload (byte[] 版本)
+     * Then: 驗證 mockClient.upload (byte[] 版本) 被正確調用
+     */
+    @Test
+    @DisplayName("情境：記憶體檔案上傳操作正確委派至對應客戶端")
+    void testUploadMemoryDelegation() {
+        byte[] content = "Hello Memory Transmission".getBytes();
+        RemoteFilePath remote = RemoteFilePath.of("/remote/data");
+
+        adapter.uploadFromMemory(config, content, remote, "memory_file.txt");
+
+        verify(mockClient).uploadFromMemory(config, content, remote, "memory_file.txt");
+    }
+
+    /**
+     * Feature: 檔案傳輸閘道操作委派
      * Scenario: 呼叫 download 時正確委派至工廠解析之客戶端
      * Given: 準備連線配置與下載路徑
      * When: 呼叫 adapter.download
@@ -129,5 +147,28 @@ class FileTransmissionGatewayAdapterTest {
         verify(mockClient).deleteFile(config, remotePath);
         verify(mockClient).deleteDirectory(config, remotePath);
         verify(mockClient).testConnection(config);
+    }
+
+    /**
+     * Feature: 檔案傳輸閘道操作委派
+     * Scenario: 呼叫 existsFile 與 moveFile 時正確委派至工廠解析之客戶端
+     * Given: 準備連線配置、遠端檔案路徑與目標路徑
+     * When: 呼叫 adapter.existsFile 與 adapter.moveFile
+     * Then: 驗證 mockClient.existsFile 與 mockClient.moveFile 被正確調用且回傳預期結果
+     */
+    @Test
+    @DisplayName("情境：檔案存在檢查與移動重命名操作正確委派至對應客戶端")
+    void testExistsFileAndMoveFileDelegation() {
+        RemoteFilePath sourcePath = RemoteFilePath.of("/remote/data/file.txt");
+        RemoteFilePath targetPath = RemoteFilePath.of("/remote/data/file_20261018.bak");
+
+        when(mockClient.existsFile(config, sourcePath)).thenReturn(true);
+
+        boolean exists = adapter.existsFile(config, sourcePath);
+        assertTrue(exists);
+        verify(mockClient).existsFile(config, sourcePath);
+
+        adapter.moveFile(config, sourcePath, targetPath);
+        verify(mockClient).moveFile(config, sourcePath, targetPath);
     }
 }

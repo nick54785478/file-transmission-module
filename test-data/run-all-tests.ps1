@@ -1,6 +1,10 @@
 # ==============================================================================
 # 檔案傳輸模組 (File Transmission Module) API 自動化端對端測試腳本
 # ==============================================================================
+# 說明：
+# 傳輸 API 相關的連線設定 (主機、通訊埠、帳號、密碼等) 已移入後端集中管理。
+# 所有傳輸請求僅需提供 credentialId (如 mock-sftp, mock-ftp, mock-ftps) 與傳輸路徑。
+# ==============================================================================
 $ErrorActionPreference = "Continue"
 $baseUrl = "http://localhost:8080"
 $baseDir = "D:/桌面/ModuleWorkSpace/file-transmission-module"
@@ -30,17 +34,11 @@ if (-not (Test-ApiHealth)) {
 }
 
 # ------------------------------------------------------------------------------
-# TC-01: SFTP 同步上傳
+# TC-01: SFTP 同步上傳 (透過後端 mock-sftp 憑證)
 # ------------------------------------------------------------------------------
-Write-Step "【TC-01】SFTP 同步上傳檔案測試"
+Write-Step "【TC-01】SFTP 同步上傳檔案測試 (透過 credentialId: mock-sftp)"
 $tc01Body = @{
-    host = "127.0.0.1"
-    port = 2222
-    username = "tester"
-    password = "password"
-    protocol = "SFTP"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-sftp"
     localFilePath = $uploadFile
     remotePath = "/upload"
     filename = "sftp-uploaded-auto.txt"
@@ -48,7 +46,7 @@ $tc01Body = @{
 
 try {
     $res = Invoke-RestMethod -Uri "$baseUrl/api/transmission/upload" -Method Post -ContentType "application/json" -Body $tc01Body
-    Write-Host " -> 上傳成功! Status: $($res.status), TrackingId: $($res.trackingId)" -ForegroundColor Green
+    Write-Host " -> 上傳成功! Status: $($res.status), TrackingId: $($res.transmissionId)" -ForegroundColor Green
 } catch {
     Write-Host " -> 呼叫失敗: $($_.Exception.Message)" -ForegroundColor Red
 }
@@ -58,13 +56,7 @@ try {
 # ------------------------------------------------------------------------------
 Write-Step "【TC-02】SFTP 非同步上傳與狀態輪詢"
 $tc02Body = @{
-    host = "127.0.0.1"
-    port = 2222
-    username = "tester"
-    password = "password"
-    protocol = "SFTP"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-sftp"
     localFilePath = $uploadFile
     remotePath = "/upload"
     filename = "sftp-async-auto.txt"
@@ -83,17 +75,11 @@ try {
 }
 
 # ------------------------------------------------------------------------------
-# TC-03: FTP 同步上傳
+# TC-03: FTP 同步上傳 (透過後端 mock-ftp 憑證)
 # ------------------------------------------------------------------------------
-Write-Step "【TC-03】FTP 同步上傳檔案測試"
+Write-Step "【TC-03】FTP 同步上傳檔案測試 (透過 credentialId: mock-ftp)"
 $tc03Body = @{
-    host = "127.0.0.1"
-    port = 2121
-    username = "tester"
-    password = "password"
-    protocol = "FTP"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-ftp"
     localFilePath = $uploadFile
     remotePath = "/"
     filename = "ftp-uploaded-auto.txt"
@@ -107,17 +93,11 @@ try {
 }
 
 # ------------------------------------------------------------------------------
-# TC-04: FTPS (TLS) 同步上傳
+# TC-04: FTPS (TLS) 同步上傳 (透過後端 mock-ftps 憑證)
 # ------------------------------------------------------------------------------
-Write-Step "【TC-04】FTPS (TLS 加密) 同步上傳檔案測試"
+Write-Step "【TC-04】FTPS (TLS 加密) 同步上傳檔案測試 (透過 credentialId: mock-ftps)"
 $tc04Body = @{
-    host = "127.0.0.1"
-    port = 2122
-    username = "tester"
-    password = "password"
-    protocol = "FTPS"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-ftps"
     localFilePath = $uploadFile
     remotePath = "/"
     filename = "ftps-uploaded-auto.txt"
@@ -131,19 +111,29 @@ try {
 }
 
 # ------------------------------------------------------------------------------
+# TC-04B: Multipart 表單上傳 (Zero Disk I/O 記憶體直傳)
+# ------------------------------------------------------------------------------
+Write-Step "【TC-04B】Multipart 表單檔案上傳測試 (Zero Disk I/O 記憶體直傳)"
+try {
+    $resJson = curl.exe -s -X POST "$baseUrl/api/transmission/upload/file" `
+        -F "file=@$uploadFile" `
+        -F "credentialId=mock-sftp" `
+        -F "remotePath=/upload" `
+        -F "filename=sftp-multipart-auto.txt"
+    $res = $resJson | ConvertFrom-Json
+    Write-Host " -> 上傳成功! Status: $($res.status), File: $($res.fileName), Source: $($res.sourcePath)" -ForegroundColor Green
+} catch {
+    Write-Host " -> 呼叫失敗: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# ------------------------------------------------------------------------------
 # TC-05: SFTP 同步下載
 # ------------------------------------------------------------------------------
-Write-Step "【TC-05】SFTP 同步下載檔案測試"
+Write-Step "【TC-05】SFTP 同步下載檔案測試 (透過 credentialId: mock-sftp)"
 $tc05Body = @{
-    host = "127.0.0.1"
-    port = 2222
-    username = "tester"
-    password = "password"
-    protocol = "SFTP"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-sftp"
     remoteFilePath = "/upload/sftp-uploaded-auto.txt"
-    savedPath = "$downloadDir/sftp-downloaded-auto.txt"
+    savedLocalPath = "$downloadDir/sftp-downloaded-auto.txt"
 } | ConvertTo-Json
 
 try {
@@ -158,13 +148,7 @@ try {
 # ------------------------------------------------------------------------------
 Write-Step "【TC-07】SFTP 目錄同步 (LOCAL_TO_REMOTE)"
 $tc07Body = @{
-    host = "127.0.0.1"
-    port = 2222
-    username = "tester"
-    password = "password"
-    protocol = "SFTP"
-    timeoutMs = 10000
-    passiveMode = $true
+    credentialId = "mock-sftp"
     localDir = $syncFolder
     remoteDir = "/upload/sync-auto"
     direction = "LOCAL_TO_REMOTE"
@@ -173,23 +157,17 @@ $tc07Body = @{
 
 try {
     $res = Invoke-RestMethod -Uri "$baseUrl/api/transmission/sync" -Method Post -ContentType "application/json" -Body $tc07Body
-    Write-Host " -> 目錄同步成功! Transferred: $($res.transferredCount), Status: $($res.status)" -ForegroundColor Green
+    Write-Host " -> 目錄同步成功! Transferred: $($res.filesTransferredCount), Status: $($res.status)" -ForegroundColor Green
 } catch {
     Write-Host " -> 呼叫失敗: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 # ------------------------------------------------------------------------------
-# TC-09: 異常情境 - 密碼錯誤 (預期 502 Bad Gateway)
+# TC-09: 異常情境 - 憑證識別碼不存在 (預期 400 Bad Request)
 # ------------------------------------------------------------------------------
-Write-Step "【TC-09】異常情境測試：密碼錯誤 (預期 502)"
+Write-Step "【TC-09】異常情境測試：憑證不存在 (預期 400 Bad Request)"
 $tc09Body = @{
-    host = "127.0.0.1"
-    port = 2222
-    username = "tester"
-    password = "wrong_password_123"
-    protocol = "SFTP"
-    timeoutMs = 5000
-    passiveMode = $true
+    credentialId = "non-existing-credential"
     localFilePath = $uploadFile
     remotePath = "/upload"
     filename = "should-fail.txt"
@@ -201,6 +179,63 @@ try {
 } catch {
     $statusCode = [int]$_.Exception.Response.StatusCode
     Write-Host " -> 捕獲預期異常! HTTP 狀態碼: $statusCode" -ForegroundColor Green
+}
+
+# ------------------------------------------------------------------------------
+# TC-12: 異常情境 - Multipart 上傳檔案為空 (預期 400 Bad Request)
+# ------------------------------------------------------------------------------
+Write-Step "【TC-12】異常情境測試：Multipart 上傳空檔案 (預期 400)"
+try {
+    $emptyTemp = "$env:TEMP\empty-upload-test.txt"
+    New-Item -Path $emptyTemp -ItemType File -Force | Out-Null
+    $resJson = curl.exe -s -w "`n%{http_code}" -X POST "$baseUrl/api/transmission/upload/file" `
+        -F "file=@$emptyTemp" `
+        -F "credentialId=mock-sftp" `
+        -F "remotePath=/upload"
+    $lines = $resJson -split "`n"
+    $httpCode = $lines[-1].Trim()
+    if ($httpCode -eq "400") {
+        Write-Host " -> 捕獲預期異常! HTTP 狀態碼: 400 Bad Request" -ForegroundColor Green
+    } else {
+        Write-Host " -> 回應狀態碼非預期: $httpCode" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host " -> 執行例外: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# ------------------------------------------------------------------------------
+# TC-13: 註冊伺服器傳輸憑證 (AES-GCM 落盤加密)
+# ------------------------------------------------------------------------------
+Write-Step "【TC-13】註冊伺服器傳輸憑證 (AES-GCM 加密落盤)"
+$credBody = @{
+    alias = "mock-sftp-auto"
+    host = "127.0.0.1"
+    port = 2222
+    protocol = "SFTP"
+    username = "tester"
+    password = "password"
+    description = "自動化腳本註冊之 SFTP 憑證"
+} | ConvertTo-Json
+
+try {
+    $resCred = Invoke-RestMethod -Uri "$baseUrl/api/credentials" -Method Post -ContentType "application/json" -Body $credBody
+    Write-Host " -> 憑證註冊成功! ID: $($resCred.id), Alias: $($resCred.alias), MaskedPassword: $($resCred.maskedPassword)" -ForegroundColor Green
+
+    # ------------------------------------------------------------------------------
+    # TC-15: 透過自訂註冊之憑證別名快速發起檔案上傳
+    # ------------------------------------------------------------------------------
+    Write-Step "【TC-15】透過自訂 credentialId 發起檔案上傳"
+    $uploadByCredBody = @{
+        credentialId = "mock-sftp-auto"
+        localFilePath = $uploadFile
+        remotePath = "/upload"
+        filename = "sftp-via-credential-auto.txt"
+    } | ConvertTo-Json
+
+    $resUpload = Invoke-RestMethod -Uri "$baseUrl/api/transmission/upload" -Method Post -ContentType "application/json" -Body $uploadByCredBody
+    Write-Host " -> 依憑證上傳成功! TrackingId: $($resUpload.transmissionId), Status: $($resUpload.status)" -ForegroundColor Green
+} catch {
+    Write-Host " -> 憑證操作或上傳失敗: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Write-Host "`n==================================================" -ForegroundColor Cyan

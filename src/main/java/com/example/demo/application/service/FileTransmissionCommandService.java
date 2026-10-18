@@ -6,6 +6,7 @@ import com.example.demo.application.port.in.SubmitDownloadFileUseCase;
 import com.example.demo.application.port.in.SubmitSyncDirectoryUseCase;
 import com.example.demo.application.port.in.SubmitUploadFileUseCase;
 import com.example.demo.application.port.in.SyncDirectoryUseCase;
+import com.example.demo.application.port.in.UploadFileFromMemoryUseCase;
 import com.example.demo.application.port.in.UploadFileUseCase;
 import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
@@ -14,6 +15,7 @@ import com.example.demo.application.port.out.FileTransmissionTrackerPort;
 import com.example.demo.application.shared.command.DownloadFileCommand;
 import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
+import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
@@ -44,6 +46,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class FileTransmissionCommandService implements
         UploadFileUseCase,
+        UploadFileFromMemoryUseCase,
         DownloadFileUseCase,
         SyncDirectoryUseCase,
         SubmitUploadFileUseCase,
@@ -93,6 +96,7 @@ public class FileTransmissionCommandService implements
 
     @Override
     public FileTransmissionGottenResult uploadFile(UploadFileCommand command) {
+        // 對傳輸伺服器配置中的機密憑證 (登入密碼與 SSH 私鑰 Passphrase) 進行解密
         TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
 
@@ -106,6 +110,10 @@ public class FileTransmissionCommandService implements
             String fileName = (command.filename() != null && !command.filename().trim().isEmpty())
                     ? command.filename().trim()
                     : localFile.getFileName();
+
+            // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+            RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
+            archiveExistingRemoteFile(effectiveConfig, targetFilePath);
 
             // 呼叫 Outbound Port 執行實際通訊閘道傳輸
             fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), fileName);
@@ -125,6 +133,42 @@ public class FileTransmissionCommandService implements
     }
 
     @Override
+    public FileTransmissionGottenResult uploadFileFromMemory(UploadFileFromMemoryCommand command) {
+        TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
+        String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
+
+        try {
+            byte[] content = command.fileContent();
+            long fileSize = content.length;
+            String fileName = command.filename();
+
+            // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+            RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
+            archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+
+            // 呼叫 Outbound Port 執行實際通訊閘道傳輸 (Zero Disk I/O 記憶體直傳)
+            fileTransmissionGatewayPort.uploadFromMemory(
+                    effectiveConfig,
+                    content,
+                    command.remotePath(),
+                    fileName
+            );
+
+            // 透過 Outbound Port 記錄追蹤成功並獲取傳輸結果 DTO
+            return fileTransmissionTrackerPort.recordUploadSuccess(
+                    trackingId,
+                    null,
+                    command.remotePath(),
+                    fileName,
+                    fileSize
+            );
+        } catch (Exception ex) {
+            fileTransmissionTrackerPort.recordFailure(trackingId, ex.getMessage());
+            throw new FileTransmissionException("記憶體檔案上傳失敗: " + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
     public FileTransmissionSubmittedResult submitUploadFile(UploadFileCommand command) {
         TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
@@ -140,6 +184,10 @@ public class FileTransmissionCommandService implements
                 String fileName = (command.filename() != null && !command.filename().trim().isEmpty())
                         ? command.filename().trim()
                         : localFile.getFileName();
+
+                // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+                RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
+                archiveExistingRemoteFile(effectiveConfig, targetFilePath);
 
                 // 上傳本機檔案至遠端伺服器指定目錄
                 fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), fileName);
@@ -280,5 +328,19 @@ public class FileTransmissionCommandService implements
                 "IN_PROGRESS",
                 "目錄同步任務已提交至背景執行緒執行"
         );
+    }
+
+    /**
+     * 依據方案 A (標準最新版維護原名 + 舊版本自動歷史歸檔) 策略：
+     * 若遠端目標檔案已存在，則先將既有遠端檔案移動備份為 timestamp .bak 檔案，確保最新版永遠保有名稱且歷史版本不流失。
+     *
+     * @param config 傳輸伺服器配置模型
+     * @param targetFilePath 遠端目標檔案完整路徑模型
+     */
+    private void archiveExistingRemoteFile(TransmissionServerConfig config, RemoteFilePath targetFilePath) {
+        if (fileTransmissionGatewayPort.existsFile(config, targetFilePath)) {
+            RemoteFilePath backupPath = targetFilePath.toBackupPath();
+            fileTransmissionGatewayPort.moveFile(config, targetFilePath, backupPath);
+        }
     }
 }

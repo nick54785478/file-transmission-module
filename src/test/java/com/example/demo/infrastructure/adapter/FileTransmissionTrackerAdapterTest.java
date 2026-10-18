@@ -221,19 +221,7 @@ class FileTransmissionTrackerAdapterTest {
     @DisplayName("情境：非現存 session 透過 JPA 更新為 FAILED")
     void testRecordFailureFallbackToJpa() {
         String trackingId = "non-existing-session-id";
-        TransmissionSessionEntity entity = new TransmissionSessionEntity(
-                trackingId,
-                "SFTP",
-                TransmissionStatus.IN_PROGRESS,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                java.time.Instant.now(),
-                null
-        );
+        TransmissionSessionEntity entity = TransmissionSessionEntity.start(trackingId, "SFTP");
         when(transmissionSessionJpaRepository.findById(trackingId)).thenReturn(Optional.of(entity));
 
         adapter.recordFailure(trackingId, "伺服器拒絕連線");
@@ -271,7 +259,7 @@ class FileTransmissionTrackerAdapterTest {
 
         // 2. 從資料庫查詢歷史紀錄
         String historicalId = "hist-001";
-        TransmissionSessionEntity historicalEntity = new TransmissionSessionEntity(
+        TransmissionSessionEntity historicalEntity = TransmissionSessionEntity.reconstitute(
                 historicalId,
                 "FTP",
                 TransmissionStatus.COMPLETED,

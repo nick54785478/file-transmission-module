@@ -55,6 +55,7 @@ services:
   file-manager-ui:
     image: filebrowser/filebrowser:latest
     container_name: mock-file-manager-ui
+    user: root
     ports:
       - "8088:80"
     command: ["--noauth", "-r", "/srv"]

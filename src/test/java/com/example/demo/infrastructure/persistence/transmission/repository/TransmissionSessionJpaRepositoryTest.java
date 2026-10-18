@@ -39,7 +39,7 @@ class TransmissionSessionJpaRepositoryTest {
     @Test
     @DisplayName("情境：保存傳輸階段實體並依主鍵成功查詢")
     void testSaveAndFindById() {
-        TransmissionSessionEntity entity = new TransmissionSessionEntity(
+        TransmissionSessionEntity entity = TransmissionSessionEntity.reconstitute(
                 "session-001",
                 "SFTP",
                 TransmissionStatus.COMPLETED,
@@ -75,19 +75,19 @@ class TransmissionSessionJpaRepositoryTest {
     @Test
     @DisplayName("情境：依狀態與傳輸協定過濾查詢")
     void testFindByStatusAndProtocol() {
-        TransmissionSessionEntity e1 = new TransmissionSessionEntity(
+        TransmissionSessionEntity e1 = TransmissionSessionEntity.reconstitute(
                 "session-101",
                 "FTP",
                 TransmissionStatus.COMPLETED,
                 null, null, "f1.txt", 100L, 20L, null, Instant.now(), Instant.now()
         );
-        TransmissionSessionEntity e2 = new TransmissionSessionEntity(
+        TransmissionSessionEntity e2 = TransmissionSessionEntity.reconstitute(
                 "session-102",
                 "FTP",
                 TransmissionStatus.FAILED,
                 null, null, "f2.txt", 200L, 50L, "連線中斷", Instant.now(), Instant.now()
         );
-        TransmissionSessionEntity e3 = new TransmissionSessionEntity(
+        TransmissionSessionEntity e3 = TransmissionSessionEntity.reconstitute(
                 "session-103",
                 "SFTP",
                 TransmissionStatus.COMPLETED,

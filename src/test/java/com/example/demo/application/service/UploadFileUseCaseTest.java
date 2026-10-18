@@ -288,4 +288,91 @@ class UploadFileUseCaseTest {
             Files.deleteIfExists(tempFile);
         }
     }
+
+    /**
+     * Feature: 檔案上傳業務流程 (方案 A 歷史歸檔策略)
+     * Scenario: 當遠端伺服器已存在同名檔案時，先自動備份舊檔案為 .bak 後再執行新檔案上傳
+     * Given: 準備本機檔案與遠端路徑，模擬遠端已存在同名檔案 (existsFile 回傳 true)
+     * When: 執行 UploadFileUseCase 的 uploadFile 方法
+     * Then: 驗證先呼叫 moveFile 將既有檔案備份為 .bak 格式，再呼叫 upload 寫入最新版本
+     */
+    @Test
+    @DisplayName("情境：遠端檔案已存在時，自動歸檔既有檔案為 .bak 後上傳最新版 (方案 A)")
+    void testUploadFileWhenRemoteFileExistsArchivedBeforeUpload() throws IOException {
+        Path tempFile = Files.createTempFile("test-archive-", ".txt");
+        Files.writeString(tempFile, "New Version Content");
+
+        try {
+            TransmissionServerConfig serverConfig = TransmissionServerConfig.of(
+                    "192.168.1.100",
+                    22,
+                    TransmissionProtocol.SFTP,
+                    "testuser",
+                    "testpass"
+            );
+
+            UploadFileCommand command = new UploadFileCommand(
+                    serverConfig,
+                    LocalFilePath.of(tempFile.toString()),
+                    RemoteFilePath.of("/remote/data"),
+                    "report.txt"
+            );
+
+            when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
+                    .thenReturn("track-upload-archive");
+
+            RemoteFilePath expectedTargetFilePath = RemoteFilePath.of("/remote/data/report.txt");
+            // 模擬遠端目標檔案已存在
+            when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedTargetFilePath)))
+                    .thenReturn(true);
+
+            FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+                    "track-upload-archive",
+                    "SFTP",
+                    "COMPLETED",
+                    tempFile.toString(),
+                    "/remote/data",
+                    "report.txt",
+                    Files.size(tempFile),
+                    50L,
+                    null
+            );
+
+            when(fileTransmissionTrackerPort.recordUploadSuccess(
+                    eq("track-upload-archive"),
+                    any(LocalFilePath.class),
+                    eq(RemoteFilePath.of("/remote/data")),
+                    eq("report.txt"),
+                    anyLong()
+            )).thenReturn(mockResult);
+
+            FileTransmissionGottenResult result = commandService.uploadFile(command);
+
+            assertNotNull(result);
+            assertEquals("COMPLETED", result.status());
+
+            // 驗證檢查檔案存在
+            verify(fileTransmissionGatewayPort).existsFile(eq(serverConfig), eq(expectedTargetFilePath));
+
+            // 驗證呼叫 moveFile 將原檔案改名為備份路徑 (.bak)
+            ArgumentCaptor<RemoteFilePath> backupPathCaptor = ArgumentCaptor.forClass(RemoteFilePath.class);
+            verify(fileTransmissionGatewayPort).moveFile(
+                    eq(serverConfig),
+                    eq(expectedTargetFilePath),
+                    backupPathCaptor.capture()
+            );
+            assertTrue(backupPathCaptor.getValue().getValue().startsWith("/remote/data/report_"));
+            assertTrue(backupPathCaptor.getValue().getValue().endsWith(".bak"));
+
+            // 驗證呼叫 upload 將新檔案寫入原正規檔名
+            verify(fileTransmissionGatewayPort).upload(
+                    eq(serverConfig),
+                    any(LocalFilePath.class),
+                    eq(RemoteFilePath.of("/remote/data")),
+                    eq("report.txt")
+            );
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
 }

@@ -2,6 +2,9 @@
 
 本文件專為**維運工程師 (DevOps / SRE)**、**後端開發人員**與**資安稽核人員**撰寫，詳細說明 `file-transmission-module` 內建的機密防護機制、AES-GCM 加密架構、外部化金鑰配置階層、各環境部署指引、金鑰輪換 (Key Rotation) 作業流程與故障排查。
 
+> 📘 **相關重要文件：**
+> * 欲深入了解「遠端主機帳密、SSH 私鑰與內部 AES-GCM 金鑰的 3 類角色定位與端到端生命週期」，請參閱：[CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md](file:///D:/桌面/ModuleWorkSpace/file-transmission-module/doc/maintainance/CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md)
+
 ---
 
 ## 目錄

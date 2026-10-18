@@ -260,6 +260,29 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 處理查無資料異常 (NoSuchElementException)
+     *
+     * @param ex 查無元素例外
+     * @param request HTTP 請求物件
+     * @return 404 Not Found 與錯誤回應資料載體
+     */
+    @ExceptionHandler(java.util.NoSuchElementException.class)
+    public ResponseEntity<TransmissionErrorOccurredResource> handleNoSuchElementException(
+            java.util.NoSuchElementException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("查無指定的資料資源 [URI: {}]: {}", request.getRequestURI(), ex.getMessage());
+        HttpStatus status = HttpStatus.NOT_FOUND;
+        TransmissionErrorOccurredResource errorResource = TransmissionResourceAssembler.toErrorResource(
+                status,
+                ex.getMessage(),
+                request.getRequestURI(),
+                ex.getClass().getSimpleName()
+        );
+        return ResponseEntity.status(status).body(errorResource);
+    }
+
+    /**
      * 處理全域所有未預期之例外 (Exception)
      * <p>
      * 作為系統表現層的最後防線，攔截所有未被特定 Handler 捕捉的例外，防止未受控的 Exception 堆疊直接洩漏。

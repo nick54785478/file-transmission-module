@@ -55,7 +55,7 @@ public class TransmissionDtoAssembler {
                 transmissionId,
                 protocol,
                 status,
-                sourcePath != null ? sourcePath.getValue() : "",
+                sourcePath != null ? sourcePath.getValue() : "<memory>",
                 targetPath != null ? targetPath.getValue() : "",
                 fileName,
                 fileSize,
