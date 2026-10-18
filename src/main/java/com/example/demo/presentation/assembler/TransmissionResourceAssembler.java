@@ -152,17 +152,6 @@ public class TransmissionResourceAssembler {
     }
 
     /**
-     * 將 UploadFileMultipartResource 與上傳檔案二進位資料轉換為 UploadFileFromMemoryCommand 應用命令
-     */
-    public static UploadFileFromMemoryCommand toCommand(
-            UploadFileMultipartResource resource,
-            byte[] fileContent,
-            String originalFilename
-    ) {
-        return toCommand(resource, fileContent, originalFilename, null);
-    }
-
-    /**
      * 將 UploadFileMultipartResource 與檔案二進位轉換為 UploadFileFromMemoryCommand (透過憑證儲存埠依 credentialId 自動解析配置)
      */
     public static UploadFileFromMemoryCommand toCommand(
@@ -342,13 +331,6 @@ public class TransmissionResourceAssembler {
     }
 
     /**
-     * 將 DownloadFileResource 請求載體轉換為 DownloadFileCommand 應用命令
-     */
-    public static DownloadFileCommand toCommand(DownloadFileResource resource) {
-        return toCommand(resource, null);
-    }
-
-    /**
      * 將 DownloadFileResource 請求載體轉換為 DownloadFileCommand 應用命令 (透過憑證儲存埠依 credentialId 自動解析配置)
      */
     public static DownloadFileCommand toCommand(DownloadFileResource resource, ServerCredentialStoragePort credentialStoragePort) {
@@ -372,13 +354,6 @@ public class TransmissionResourceAssembler {
      */
     public SyncDirectoryCommand toCommand(SyncDirectoryResource resource) {
         return toCommand(resource, this.serverCredentialStoragePort);
-    }
-
-    /**
-     * 將 SyncDirectoryResource 請求載體轉換為 SyncDirectoryCommand 應用命令
-     */
-    public static SyncDirectoryCommand toCommand(SyncDirectoryResource resource) {
-        return toCommand(resource, null);
     }
 
     /**

@@ -16,7 +16,6 @@ import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
-import com.example.demo.application.shared.exception.FileTransmissionException;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import com.example.demo.presentation.assembler.TransmissionResourceAssembler;
 import com.example.demo.presentation.resource.in.DownloadFileResource;
