@@ -8,6 +8,7 @@ import com.example.demo.application.port.in.SubmitUploadFileUseCase;
 import com.example.demo.application.port.in.SyncDirectoryUseCase;
 import com.example.demo.application.port.in.UploadFileFromMemoryUseCase;
 import com.example.demo.application.port.in.UploadFileUseCase;
+import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.command.DownloadFileCommand;
 import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
@@ -27,8 +28,8 @@ import com.example.demo.presentation.resource.out.FileDownloadedResource;
 import com.example.demo.presentation.resource.out.FileTransmissionSubmittedResource;
 import com.example.demo.presentation.resource.out.FileUploadedResource;
 import com.example.demo.presentation.resource.out.TransmissionErrorOccurredResource;
-import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.presentation.resource.out.TransmissionStatusGottenResource;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -36,18 +37,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.Part;
-import jakarta.validation.ConstraintViolation;
-import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Valid;
 import jakarta.validation.Validator;
 import jakarta.validation.constraints.NotBlank;
-import java.io.InputStream;
-import java.io.IOException;
-import java.util.Optional;
-import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -63,7 +56,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.multipart.MultipartHttpServletRequest;
+
+import java.util.Optional;
 
 /**
  * 檔案傳輸表現層控制器 (FileTransmissionController - Inbound Adapter)
@@ -92,9 +86,43 @@ public class FileTransmissionController {
     private final SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase;
     private final GetTransmissionStatusUseCase getTransmissionStatusUseCase;
     private final UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase;
-    private final ObjectMapper objectMapper;
-    private final ServerCredentialStoragePort serverCredentialStoragePort;
-    private final Validator validator;
+    private final TransmissionResourceAssembler resourceAssembler;
+
+    /**
+     * 主要建構子 (供 Spring 容器依賴注入)
+     *
+     * @param uploadFileUseCase            同步上傳 UseCase
+     * @param downloadFileUseCase          同步下載 UseCase
+     * @param syncDirectoryUseCase         同步目錄 UseCase
+     * @param submitUploadFileUseCase      非同步上傳 UseCase
+     * @param submitDownloadFileUseCase    非同步下載 UseCase
+     * @param submitSyncDirectoryUseCase   非同步目錄同步 UseCase
+     * @param getTransmissionStatusUseCase 查詢傳輸狀態 UseCase
+     * @param uploadFileFromMemoryUseCase  記憶體直傳 UseCase
+     * @param resourceAssembler            表現層資源組裝器 (Anti-Corruption Layer)
+     */
+    @Autowired
+    public FileTransmissionController(
+            UploadFileUseCase uploadFileUseCase,
+            DownloadFileUseCase downloadFileUseCase,
+            SyncDirectoryUseCase syncDirectoryUseCase,
+            SubmitUploadFileUseCase submitUploadFileUseCase,
+            SubmitDownloadFileUseCase submitDownloadFileUseCase,
+            SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase,
+            GetTransmissionStatusUseCase getTransmissionStatusUseCase,
+            UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase,
+            @Autowired(required = false) TransmissionResourceAssembler resourceAssembler
+    ) {
+        this.uploadFileUseCase = uploadFileUseCase;
+        this.downloadFileUseCase = downloadFileUseCase;
+        this.syncDirectoryUseCase = syncDirectoryUseCase;
+        this.submitUploadFileUseCase = submitUploadFileUseCase;
+        this.submitDownloadFileUseCase = submitDownloadFileUseCase;
+        this.submitSyncDirectoryUseCase = submitSyncDirectoryUseCase;
+        this.getTransmissionStatusUseCase = getTransmissionStatusUseCase;
+        this.uploadFileFromMemoryUseCase = uploadFileFromMemoryUseCase;
+        this.resourceAssembler = resourceAssembler != null ? resourceAssembler : new TransmissionResourceAssembler();
+    }
 
     /**
      * 向下相容建構子 (7 參數版本)：維持既有單元測試完全相容
@@ -108,7 +136,7 @@ public class FileTransmissionController {
             SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase,
             GetTransmissionStatusUseCase getTransmissionStatusUseCase
     ) {
-        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, null, new ObjectMapper(), null, null);
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, null, new TransmissionResourceAssembler());
     }
 
     /**
@@ -124,7 +152,7 @@ public class FileTransmissionController {
             GetTransmissionStatusUseCase getTransmissionStatusUseCase,
             UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase
     ) {
-        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new ObjectMapper(), null, null);
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new TransmissionResourceAssembler());
     }
 
     /**
@@ -142,13 +170,12 @@ public class FileTransmissionController {
             ObjectMapper objectMapper,
             ServerCredentialStoragePort serverCredentialStoragePort
     ) {
-        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, objectMapper, serverCredentialStoragePort, null);
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new TransmissionResourceAssembler(serverCredentialStoragePort, objectMapper, null));
     }
 
     /**
-     * 完整建構子 (供 Spring 容器依賴注入)
+     * 向下相容建構子 (11 參數版本)
      */
-    @Autowired
     public FileTransmissionController(
             UploadFileUseCase uploadFileUseCase,
             DownloadFileUseCase downloadFileUseCase,
@@ -158,21 +185,11 @@ public class FileTransmissionController {
             SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase,
             GetTransmissionStatusUseCase getTransmissionStatusUseCase,
             UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase,
-            @Autowired(required = false) ObjectMapper objectMapper,
-            @Autowired(required = false) ServerCredentialStoragePort serverCredentialStoragePort,
-            @Autowired(required = false) Validator validator
+            ObjectMapper objectMapper,
+            ServerCredentialStoragePort serverCredentialStoragePort,
+            Validator validator
     ) {
-        this.uploadFileUseCase = uploadFileUseCase;
-        this.downloadFileUseCase = downloadFileUseCase;
-        this.syncDirectoryUseCase = syncDirectoryUseCase;
-        this.submitUploadFileUseCase = submitUploadFileUseCase;
-        this.submitDownloadFileUseCase = submitDownloadFileUseCase;
-        this.submitSyncDirectoryUseCase = submitSyncDirectoryUseCase;
-        this.getTransmissionStatusUseCase = getTransmissionStatusUseCase;
-        this.uploadFileFromMemoryUseCase = uploadFileFromMemoryUseCase;
-        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
-        this.serverCredentialStoragePort = serverCredentialStoragePort;
-        this.validator = validator;
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new TransmissionResourceAssembler(serverCredentialStoragePort, objectMapper, validator));
     }
 
     /**
@@ -194,9 +211,9 @@ public class FileTransmissionController {
     })
     @PostMapping("/upload")
     public ResponseEntity<FileUploadedResource> upload(@Valid @RequestBody UploadFileResource resource) {
-        UploadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        UploadFileCommand command = resourceAssembler.toCommand(resource);
         FileTransmissionGottenResult result = uploadFileUseCase.uploadFile(command);
-        FileUploadedResource response = TransmissionResourceAssembler.toUploadedResource(result);
+        FileUploadedResource response = resourceAssembler.toUploadedResource(result);
         return ResponseEntity.ok(response);
     }
 
@@ -217,18 +234,18 @@ public class FileTransmissionController {
     })
     @PostMapping("/upload/async")
     public ResponseEntity<FileTransmissionSubmittedResource> submitUpload(@Valid @RequestBody UploadFileResource resource) {
-        UploadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        UploadFileCommand command = resourceAssembler.toCommand(resource);
         FileTransmissionSubmittedResult result = submitUploadFileUseCase.submitUploadFile(command);
-        FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
+        FileTransmissionSubmittedResource response = resourceAssembler.toSubmittedResource(result);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
     /**
      * Multipart 檔案上傳 API (Zero Disk I/O 記憶體直傳)
      *
-     * @param file 上傳檔案二進位資料串流 (MultipartFile)
+     * @param file     上傳檔案二進位資料串流 (MultipartFile)
      * @param resource 伺服器配置與目標目錄資訊 (支援 Swagger UI JSON 部件或 Form 表單欄位)
-     * @param request HTTP 原生請求物件
+     * @param request  HTTP 原生請求物件
      * @return 上傳完成回應資料載體
      */
     @Operation(summary = "Multipart 表單檔案上傳 (記憶體直傳)", description = "透過 HTTP Multipart 直接上傳檔案串流，後端零磁碟落盤，直接依指定協定 (SFTP / FTP / FTPS) 傳輸至遠端目的地。支援直接填寫 JSON 配置 (Swagger UI) 或個別表單欄位。")
@@ -251,87 +268,15 @@ public class FileTransmissionController {
             @Parameter(hidden = true)
             HttpServletRequest request
     ) {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("上傳檔案不能為空");
-        }
-        byte[] fileBytes;
-        try {
-            fileBytes = file.getBytes();
-        } catch (IOException e) {
-            throw new FileTransmissionException("讀取上傳檔案串流失敗: " + e.getMessage(), e);
-        }
+        // 1. 委派防腐組裝器相容解析有效 Resource (支援 Swagger JSON 部件、Servlet Part 與 Form-data)
+        UploadFileMultipartResource effectiveResource = resourceAssembler.resolveEffectiveResource(resource, request);
 
-        // 智慧相容解析 resource：
-        // 1. 嘗試從 Multipart request 中的 "resource" 部件解析 JSON (Swagger UI 送出之 application/octet-stream 或 application/json)
-        UploadFileMultipartResource effectiveResource = null;
-        if (request instanceof MultipartHttpServletRequest multipartRequest) {
-            MultipartFile resourcePart = multipartRequest.getFile("resource");
-            if (resourcePart != null && !resourcePart.isEmpty()) {
-                try {
-                    effectiveResource = objectMapper.readValue(resourcePart.getBytes(), UploadFileMultipartResource.class);
-                } catch (Exception ignored) {
-                }
-            }
-        }
+        // 2. 委派組裝器將 Resource 與上傳檔案封裝為記憶體直傳 Command
+        UploadFileFromMemoryCommand command = resourceAssembler.toCommand(effectiveResource, file);
 
-        // 2. 備援嘗試從 Servlet 3.0 getPart("resource") 讀取串流
-        if (effectiveResource == null || effectiveResource.credentialId() == null) {
-            try {
-                Part part = request != null ? request.getPart("resource") : null;
-                if (part != null && part.getSize() > 0) {
-                    try (InputStream is = part.getInputStream()) {
-                        effectiveResource = objectMapper.readValue(is, UploadFileMultipartResource.class);
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        // 3. 嘗試從 request parameter "resource" (字串參數) 解析 JSON
-        if (effectiveResource == null || effectiveResource.credentialId() == null) {
-            String rawJson = request != null ? request.getParameter("resource") : null;
-            if (rawJson != null && !rawJson.trim().isEmpty()) {
-                try {
-                    effectiveResource = objectMapper.readValue(rawJson, UploadFileMultipartResource.class);
-                } catch (Exception ignored) {
-                }
-            }
-        }
-
-        // 4. 若以上皆無提供 JSON 部件，回退使用 @ModelAttribute 繫結的表單普通欄位 (如 cURL -F "credentialId=..." 或 HTML 表單)
-        if (effectiveResource == null || effectiveResource.credentialId() == null) {
-            if (resource != null && resource.credentialId() != null) {
-                effectiveResource = resource;
-            }
-        }
-
-        if (effectiveResource == null) {
-            effectiveResource = resource;
-        }
-
-        // 基本欄位校驗 (Spring Validation / JSR-380)
-        if (validator != null && effectiveResource != null) {
-            Set<ConstraintViolation<UploadFileMultipartResource>> violations = validator.validate(effectiveResource);
-            if (!violations.isEmpty()) {
-                throw new ConstraintViolationException(violations);
-            }
-        } else if (effectiveResource != null) {
-            if (effectiveResource.credentialId() == null || effectiveResource.credentialId().isBlank()) {
-                throw new IllegalArgumentException("後端伺服器憑證 ID (credentialId) 不能為空");
-            }
-            if (effectiveResource.remotePath() == null || effectiveResource.remotePath().isBlank()) {
-                throw new IllegalArgumentException("遠端目標工作目錄 (remotePath) 不能為空");
-            }
-        }
-
-        UploadFileFromMemoryCommand command = TransmissionResourceAssembler.toCommand(
-                effectiveResource,
-                fileBytes,
-                file.getOriginalFilename(),
-                serverCredentialStoragePort
-        );
+        // 3. 呼叫 UseCase 業務流程並轉換為 Response 資源
         FileTransmissionGottenResult result = uploadFileFromMemoryUseCase.uploadFileFromMemory(command);
-        FileUploadedResource response = TransmissionResourceAssembler.toUploadedResource(result);
+        FileUploadedResource response = resourceAssembler.toUploadedResource(result);
         return ResponseEntity.ok(response);
     }
 
@@ -354,9 +299,9 @@ public class FileTransmissionController {
     })
     @PostMapping("/download")
     public ResponseEntity<FileDownloadedResource> download(@Valid @RequestBody DownloadFileResource resource) {
-        DownloadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        DownloadFileCommand command = resourceAssembler.toCommand(resource);
         FileTransmissionGottenResult result = downloadFileUseCase.downloadFile(command);
-        FileDownloadedResource response = TransmissionResourceAssembler.toDownloadedResource(result);
+        FileDownloadedResource response = resourceAssembler.toDownloadedResource(result);
         return ResponseEntity.ok(response);
     }
 
@@ -377,9 +322,9 @@ public class FileTransmissionController {
     })
     @PostMapping("/download/async")
     public ResponseEntity<FileTransmissionSubmittedResource> submitDownload(@Valid @RequestBody DownloadFileResource resource) {
-        DownloadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        DownloadFileCommand command = resourceAssembler.toCommand(resource);
         FileTransmissionSubmittedResult result = submitDownloadFileUseCase.submitDownloadFile(command);
-        FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
+        FileTransmissionSubmittedResource response = resourceAssembler.toSubmittedResource(result);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
@@ -402,9 +347,9 @@ public class FileTransmissionController {
     })
     @PostMapping("/sync")
     public ResponseEntity<DirectorySynchronizedResource> sync(@Valid @RequestBody SyncDirectoryResource resource) {
-        SyncDirectoryCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        SyncDirectoryCommand command = resourceAssembler.toCommand(resource);
         DirectorySyncGottenResult result = syncDirectoryUseCase.syncDirectory(command);
-        DirectorySynchronizedResource response = TransmissionResourceAssembler.toSynchronizedResource(result);
+        DirectorySynchronizedResource response = resourceAssembler.toSynchronizedResource(result);
         return ResponseEntity.ok(response);
     }
 
@@ -425,9 +370,9 @@ public class FileTransmissionController {
     })
     @PostMapping("/sync/async")
     public ResponseEntity<FileTransmissionSubmittedResource> submitSync(@Valid @RequestBody SyncDirectoryResource resource) {
-        SyncDirectoryCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
+        SyncDirectoryCommand command = resourceAssembler.toCommand(resource);
         FileTransmissionSubmittedResult result = submitSyncDirectoryUseCase.submitSyncDirectory(command);
-        FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
+        FileTransmissionSubmittedResource response = resourceAssembler.toSubmittedResource(result);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
@@ -452,7 +397,7 @@ public class FileTransmissionController {
         Optional<FileTransmissionGottenResult> statusOpt = getTransmissionStatusUseCase.getTransmissionStatus(query);
 
         return statusOpt
-                .map(TransmissionResourceAssembler::toStatusResource)
+                .map(resourceAssembler::toStatusResource)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }

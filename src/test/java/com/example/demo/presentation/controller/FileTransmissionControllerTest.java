@@ -20,6 +20,7 @@ import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.vo.TransmissionProtocol;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
+import com.example.demo.presentation.assembler.TransmissionResourceAssembler;
 import com.example.demo.presentation.handler.GlobalExceptionHandler;
 import java.time.Instant;
 import java.util.Optional;
@@ -97,6 +98,11 @@ class FileTransmissionControllerTest {
 
     @BeforeEach
     void setUp() {
+        TransmissionResourceAssembler resourceAssembler = new TransmissionResourceAssembler(
+                serverCredentialStoragePort,
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                null
+        );
         FileTransmissionController controller = new FileTransmissionController(
                 uploadFileUseCase,
                 downloadFileUseCase,
@@ -106,8 +112,7 @@ class FileTransmissionControllerTest {
                 submitSyncDirectoryUseCase,
                 getTransmissionStatusUseCase,
                 uploadFileFromMemoryUseCase,
-                new com.fasterxml.jackson.databind.ObjectMapper(),
-                serverCredentialStoragePort
+                resourceAssembler
         );
         this.mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
