@@ -30,7 +30,6 @@ public class TransmissionSecurityProperties {
      *  取得目前配置之加密金鑰
      *
      * @return 金鑰字串
-
      */
     private String secretKey = DEFAULT_DEV_KEY;
 
