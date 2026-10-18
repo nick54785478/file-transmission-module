@@ -58,9 +58,19 @@ public class ServerCredentialQueryService implements
 
     @Override
     public List<ServerCredentialGottenResult> listCredentials(ListServerCredentialsQuery query) {
+        List<ServerCredentialGottenResult> results;
         if (query == null || query.keyword() == null || query.keyword().trim().isEmpty()) {
-            return serverCredentialStoragePort.findAll();
+            results = serverCredentialStoragePort.findAll();
+        } else {
+            results = serverCredentialStoragePort.search(query.keyword());
         }
-        return serverCredentialStoragePort.search(query.keyword());
+
+        if (query != null && query.active() != null) {
+            boolean targetActive = query.active();
+            return results.stream()
+                    .filter(item -> item.active() == targetActive)
+                    .toList();
+        }
+        return results;
     }
 }

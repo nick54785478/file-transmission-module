@@ -86,9 +86,17 @@ public interface ServerCredentialStoragePort {
     boolean existsByAlias(String alias);
 
     /**
-     * 依唯一識別碼刪除憑證
+     * 依唯一識別碼或別名軟刪除憑證 (將 active 狀態標記為 false)
      *
-     * @param id 憑證 ID
+     * @param id 憑證 ID 或別名
      */
     void deleteById(String id);
+
+    /**
+     * 依唯一識別碼或別名重新啟用/生效憑證 (將 active 狀態標記為 true)
+     *
+     * @param id 憑證 ID 或別名
+     * @return 重新生效後之憑證查詢結果 DTO
+     */
+    ServerCredentialGottenResult reactivateById(String id);
 }

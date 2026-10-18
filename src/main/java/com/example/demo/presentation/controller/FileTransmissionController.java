@@ -39,13 +39,20 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.Part;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Valid;
+import jakarta.validation.Validator;
+import jakarta.validation.constraints.NotBlank;
 import java.io.InputStream;
 import java.io.IOException;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -63,15 +70,16 @@ import org.springframework.web.multipart.MultipartHttpServletRequest;
  * <p>
  * 表現層 REST API 控制器。
  * 遵循六角形架構：
- * 1. 接收 Request Resource (純資料載體)；
+ * 1. 接收 Request Resource (純資料載體)，透過 Spring Valid (@Valid / @Validated) 進行前端輸入檢核防禦；
  * 2. 透過 TransmissionResourceAssembler 防腐層轉換為 Application Layer Command；
  * 3. 呼叫對應的 Inbound Port (UseCase)；
- * 4. 將回傳之 Result DTO 透過 Assembler 轉換為 Response Resource 回傳前端。
+ * 4. 將回傳之 Result DTO 透過 Assembler 轉換為 Response Resource 回傳前端；
  * 5. 支援同步與非同步長任務（HTTP 202 Accepted 立即回傳 trackingId，並提供 /status/{trackingId} 查詢端點）。
  * </p>
  */
 @Tag(name = "檔案傳輸 API (File Transmission API)", description = "提供同步/非同步檔案上傳、檔案下載、目錄同步及任務狀態查詢端點")
 @CrossOrigin(origins = "*", allowedHeaders = "*")
+@Validated
 @RestController
 @RequestMapping("/api/transmission")
 public class FileTransmissionController {
@@ -86,6 +94,7 @@ public class FileTransmissionController {
     private final UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase;
     private final ObjectMapper objectMapper;
     private final ServerCredentialStoragePort serverCredentialStoragePort;
+    private final Validator validator;
 
     /**
      * 向下相容建構子 (7 參數版本)：維持既有單元測試完全相容
@@ -99,7 +108,7 @@ public class FileTransmissionController {
             SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase,
             GetTransmissionStatusUseCase getTransmissionStatusUseCase
     ) {
-        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, null, new ObjectMapper(), null);
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, null, new ObjectMapper(), null, null);
     }
 
     /**
@@ -115,7 +124,25 @@ public class FileTransmissionController {
             GetTransmissionStatusUseCase getTransmissionStatusUseCase,
             UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase
     ) {
-        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new ObjectMapper(), null);
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, new ObjectMapper(), null, null);
+    }
+
+    /**
+     * 向下相容建構子 (10 參數版本)：維持既有單元測試相容
+     */
+    public FileTransmissionController(
+            UploadFileUseCase uploadFileUseCase,
+            DownloadFileUseCase downloadFileUseCase,
+            SyncDirectoryUseCase syncDirectoryUseCase,
+            SubmitUploadFileUseCase submitUploadFileUseCase,
+            SubmitDownloadFileUseCase submitDownloadFileUseCase,
+            SubmitSyncDirectoryUseCase submitSyncDirectoryUseCase,
+            GetTransmissionStatusUseCase getTransmissionStatusUseCase,
+            UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase,
+            ObjectMapper objectMapper,
+            ServerCredentialStoragePort serverCredentialStoragePort
+    ) {
+        this(uploadFileUseCase, downloadFileUseCase, syncDirectoryUseCase, submitUploadFileUseCase, submitDownloadFileUseCase, submitSyncDirectoryUseCase, getTransmissionStatusUseCase, uploadFileFromMemoryUseCase, objectMapper, serverCredentialStoragePort, null);
     }
 
     /**
@@ -132,7 +159,8 @@ public class FileTransmissionController {
             GetTransmissionStatusUseCase getTransmissionStatusUseCase,
             UploadFileFromMemoryUseCase uploadFileFromMemoryUseCase,
             @Autowired(required = false) ObjectMapper objectMapper,
-            @Autowired(required = false) ServerCredentialStoragePort serverCredentialStoragePort
+            @Autowired(required = false) ServerCredentialStoragePort serverCredentialStoragePort,
+            @Autowired(required = false) Validator validator
     ) {
         this.uploadFileUseCase = uploadFileUseCase;
         this.downloadFileUseCase = downloadFileUseCase;
@@ -144,6 +172,7 @@ public class FileTransmissionController {
         this.uploadFileFromMemoryUseCase = uploadFileFromMemoryUseCase;
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
         this.serverCredentialStoragePort = serverCredentialStoragePort;
+        this.validator = validator;
     }
 
     /**
@@ -164,7 +193,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/upload")
-    public ResponseEntity<FileUploadedResource> upload(@RequestBody UploadFileResource resource) {
+    public ResponseEntity<FileUploadedResource> upload(@Valid @RequestBody UploadFileResource resource) {
         UploadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         FileTransmissionGottenResult result = uploadFileUseCase.uploadFile(command);
         FileUploadedResource response = TransmissionResourceAssembler.toUploadedResource(result);
@@ -187,7 +216,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/upload/async")
-    public ResponseEntity<FileTransmissionSubmittedResource> submitUpload(@RequestBody UploadFileResource resource) {
+    public ResponseEntity<FileTransmissionSubmittedResource> submitUpload(@Valid @RequestBody UploadFileResource resource) {
         UploadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         FileTransmissionSubmittedResult result = submitUploadFileUseCase.submitUploadFile(command);
         FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
@@ -198,8 +227,7 @@ public class FileTransmissionController {
      * Multipart 檔案上傳 API (Zero Disk I/O 記憶體直傳)
      *
      * @param file 上傳檔案二進位資料串流 (MultipartFile)
-     * @param resource 伺服器配置與目標目錄資訊 (接收 Swagger UI / 前端送出之 JSON 部件)
-     * @param resourceForm 伺服器配置與目標目錄資訊 (接收表單鍵值對欄位)
+     * @param resource 伺服器配置與目標目錄資訊 (支援 Swagger UI JSON 部件或 Form 表單欄位)
      * @param request HTTP 原生請求物件
      * @return 上傳完成回應資料載體
      */
@@ -281,6 +309,21 @@ public class FileTransmissionController {
             effectiveResource = resource;
         }
 
+        // 基本欄位校驗 (Spring Validation / JSR-380)
+        if (validator != null && effectiveResource != null) {
+            Set<ConstraintViolation<UploadFileMultipartResource>> violations = validator.validate(effectiveResource);
+            if (!violations.isEmpty()) {
+                throw new ConstraintViolationException(violations);
+            }
+        } else if (effectiveResource != null) {
+            if (effectiveResource.credentialId() == null || effectiveResource.credentialId().isBlank()) {
+                throw new IllegalArgumentException("後端伺服器憑證 ID (credentialId) 不能為空");
+            }
+            if (effectiveResource.remotePath() == null || effectiveResource.remotePath().isBlank()) {
+                throw new IllegalArgumentException("遠端目標工作目錄 (remotePath) 不能為空");
+            }
+        }
+
         UploadFileFromMemoryCommand command = TransmissionResourceAssembler.toCommand(
                 effectiveResource,
                 fileBytes,
@@ -310,7 +353,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/download")
-    public ResponseEntity<FileDownloadedResource> download(@RequestBody DownloadFileResource resource) {
+    public ResponseEntity<FileDownloadedResource> download(@Valid @RequestBody DownloadFileResource resource) {
         DownloadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         FileTransmissionGottenResult result = downloadFileUseCase.downloadFile(command);
         FileDownloadedResource response = TransmissionResourceAssembler.toDownloadedResource(result);
@@ -333,7 +376,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/download/async")
-    public ResponseEntity<FileTransmissionSubmittedResource> submitDownload(@RequestBody DownloadFileResource resource) {
+    public ResponseEntity<FileTransmissionSubmittedResource> submitDownload(@Valid @RequestBody DownloadFileResource resource) {
         DownloadFileCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         FileTransmissionSubmittedResult result = submitDownloadFileUseCase.submitDownloadFile(command);
         FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
@@ -358,7 +401,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/sync")
-    public ResponseEntity<DirectorySynchronizedResource> sync(@RequestBody SyncDirectoryResource resource) {
+    public ResponseEntity<DirectorySynchronizedResource> sync(@Valid @RequestBody SyncDirectoryResource resource) {
         SyncDirectoryCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         DirectorySyncGottenResult result = syncDirectoryUseCase.syncDirectory(command);
         DirectorySynchronizedResource response = TransmissionResourceAssembler.toSynchronizedResource(result);
@@ -381,7 +424,7 @@ public class FileTransmissionController {
                     content = @Content(schema = @Schema(implementation = TransmissionErrorOccurredResource.class)))
     })
     @PostMapping("/sync/async")
-    public ResponseEntity<FileTransmissionSubmittedResource> submitSync(@RequestBody SyncDirectoryResource resource) {
+    public ResponseEntity<FileTransmissionSubmittedResource> submitSync(@Valid @RequestBody SyncDirectoryResource resource) {
         SyncDirectoryCommand command = TransmissionResourceAssembler.toCommand(resource, serverCredentialStoragePort);
         FileTransmissionSubmittedResult result = submitSyncDirectoryUseCase.submitSyncDirectory(command);
         FileTransmissionSubmittedResource response = TransmissionResourceAssembler.toSubmittedResource(result);
@@ -403,7 +446,7 @@ public class FileTransmissionController {
     @GetMapping("/status/{trackingId}")
     public ResponseEntity<TransmissionStatusGottenResource> getStatus(
             @Parameter(name = "trackingId", description = "傳輸作業追蹤唯一識別碼", required = true, example = "tx-20261017-001")
-            @PathVariable("trackingId") String trackingId
+            @PathVariable("trackingId") @NotBlank(message = "傳輸作業追蹤唯一識別碼 (trackingId) 不能為空") String trackingId
     ) {
         GetTransmissionStatusQuery query = GetTransmissionStatusQuery.of(trackingId);
         Optional<FileTransmissionGottenResult> statusOpt = getTransmissionStatusUseCase.getTransmissionStatus(query);

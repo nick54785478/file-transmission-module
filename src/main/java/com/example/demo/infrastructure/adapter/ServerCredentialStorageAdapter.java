@@ -205,9 +205,38 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
     @Override
     @Transactional
     public void deleteById(String id) {
-        if (id != null && !id.trim().isEmpty()) {
-            serverCredentialJpaRepository.deleteById(id.trim());
+        if (id == null || id.trim().isEmpty()) {
+            throw new IllegalArgumentException("憑證識別碼不能為空");
         }
+        String key = id.trim();
+        Optional<ServerCredentialEntity> entityOpt = serverCredentialJpaRepository.findById(key);
+        if (entityOpt.isEmpty()) {
+            entityOpt = serverCredentialJpaRepository.findByAlias(key);
+        }
+        ServerCredentialEntity entity = entityOpt
+                .orElseThrow(() -> new IllegalArgumentException("查無指定的伺服器憑證 [ID/別名: " + key + "]"));
+
+        entity.deactivate();
+        serverCredentialJpaRepository.save(entity);
+    }
+
+    @Override
+    @Transactional
+    public ServerCredentialGottenResult reactivateById(String id) {
+        if (id == null || id.trim().isEmpty()) {
+            throw new IllegalArgumentException("憑證識別碼不能為空");
+        }
+        String key = id.trim();
+        Optional<ServerCredentialEntity> entityOpt = serverCredentialJpaRepository.findById(key);
+        if (entityOpt.isEmpty()) {
+            entityOpt = serverCredentialJpaRepository.findByAlias(key);
+        }
+        ServerCredentialEntity entity = entityOpt
+                .orElseThrow(() -> new IllegalArgumentException("查無指定的伺服器憑證 [ID/別名: " + key + "]"));
+
+        entity.activate();
+        ServerCredentialEntity saved = serverCredentialJpaRepository.save(entity);
+        return toGottenResult(saved);
     }
 
     // --- 內部加解密與遮罩轉換輔助邏輯 ---

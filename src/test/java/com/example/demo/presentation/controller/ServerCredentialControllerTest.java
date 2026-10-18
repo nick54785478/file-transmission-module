@@ -4,9 +4,11 @@ import com.example.demo.application.port.in.CreateServerCredentialUseCase;
 import com.example.demo.application.port.in.DeleteServerCredentialUseCase;
 import com.example.demo.application.port.in.GetServerCredentialUseCase;
 import com.example.demo.application.port.in.ListServerCredentialsUseCase;
+import com.example.demo.application.port.in.ReactivateServerCredentialUseCase;
 import com.example.demo.application.port.in.UpdateServerCredentialUseCase;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.DeleteServerCredentialCommand;
+import com.example.demo.application.shared.command.ReactivateServerCredentialCommand;
 import com.example.demo.application.shared.command.UpdateServerCredentialCommand;
 import com.example.demo.application.shared.dto.ServerCredentialGottenResult;
 import com.example.demo.application.shared.query.GetServerCredentialQuery;
@@ -61,6 +63,9 @@ class ServerCredentialControllerTest {
     @Mock
     private DeleteServerCredentialUseCase deleteServerCredentialUseCase;
 
+    @Mock
+    private ReactivateServerCredentialUseCase reactivateServerCredentialUseCase;
+
     @BeforeEach
     void setUp() {
         ServerCredentialResourceAssembler resourceAssembler = new ServerCredentialResourceAssembler();
@@ -70,6 +75,7 @@ class ServerCredentialControllerTest {
                 getServerCredentialUseCase,
                 listServerCredentialsUseCase,
                 deleteServerCredentialUseCase,
+                reactivateServerCredentialUseCase,
                 resourceAssembler
         );
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
@@ -276,17 +282,95 @@ class ServerCredentialControllerTest {
 
     /**
      * Feature: 伺服器憑證 REST API 控制器
-     * Scenario: DELETE /api/credentials/{id} 刪除憑證成功回傳 204 No Content
-     * Given: 傳入欲刪除之憑證 ID
+     * Scenario: GET /api/credentials 支援依 active 狀態過濾查詢憑證
+     * Given: 傳入 active=false 查詢參數
+     * When: 發送 GET 請求至 /api/credentials?active=false
+     * Then: 控制器構造包含 active=false 之 ListServerCredentialsQuery 並回傳 200 OK
+     */
+    @Test
+    @DisplayName("情境：GET /api/credentials 帶 active 參數過濾軟刪除/停用憑證成功回傳 200")
+    void testListCredentialsWithActiveFilterEndpointSuccess() throws Exception {
+        ServerCredentialGottenResult inactiveCred = new ServerCredentialGottenResult(
+                "cred-2", "inactive-alias", "127.0.0.1", 2222, "SFTP", "tester",
+                "******", null, null, true, false, false, false, "已軟刪除憑證", Instant.now(), Instant.now()
+        );
+
+        when(listServerCredentialsUseCase.listCredentials(any(ListServerCredentialsQuery.class)))
+                .thenReturn(List.of(inactiveCred));
+
+        mockMvc.perform(get("/api/credentials?active=false"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].alias").value("inactive-alias"))
+                .andExpect(jsonPath("$[0].active").value(false));
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: DELETE /api/credentials/{id} 軟刪除憑證成功回傳 204 No Content
+     * Given: 傳入欲軟刪除之憑證 ID
      * When: 發送 DELETE 請求至 /api/credentials/{id}
      * Then: 控制器呼叫 DeleteServerCredentialUseCase 並回傳 204 No Content
      */
     @Test
-    @DisplayName("情境：DELETE /api/credentials/{id} 刪除憑證成功回傳 204")
+    @DisplayName("情境：DELETE /api/credentials/{id} 軟刪除憑證成功回傳 204")
     void testDeleteCredentialEndpointSuccess() throws Exception {
         mockMvc.perform(delete("/api/credentials/cred-to-delete"))
                 .andExpect(status().isNoContent());
 
         verify(deleteServerCredentialUseCase).deleteCredential(any(DeleteServerCredentialCommand.class));
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: PUT /api/credentials/{id}/reactivate 重新生效憑證成功回傳 200 OK
+     * Given: 傳入欲重新生效之憑證 ID
+     * When: 發送 PUT 請求至 /api/credentials/{id}/reactivate
+     * Then: 控制器呼叫 ReactivateServerCredentialUseCase 並回傳 200 OK 與 active=true 之脫敏資源
+     */
+    @Test
+    @DisplayName("情境：PUT /api/credentials/{id}/reactivate 重新生效憑證成功回傳 200")
+    void testReactivateCredentialPutEndpointSuccess() throws Exception {
+        ServerCredentialGottenResult reactivated = new ServerCredentialGottenResult(
+                "cred-to-reactivate", "sftp-active", "127.0.0.1", 2222, "SFTP", "tester",
+                "******", null, null, true, false, false, true, "已重新生效", Instant.now(), Instant.now()
+        );
+
+        when(reactivateServerCredentialUseCase.reactivateCredential(any(ReactivateServerCredentialCommand.class)))
+                .thenReturn(reactivated);
+
+        mockMvc.perform(put("/api/credentials/cred-to-reactivate/reactivate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("cred-to-reactivate"))
+                .andExpect(jsonPath("$.alias").value("sftp-active"))
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(reactivateServerCredentialUseCase).reactivateCredential(any(ReactivateServerCredentialCommand.class));
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: POST /api/credentials/{id}/reactivate 重新生效憑證成功回傳 200 OK
+     * Given: 傳入欲重新生效之憑證 ID
+     * When: 發送 POST 請求至 /api/credentials/{id}/reactivate
+     * Then: 控制器呼叫 ReactivateServerCredentialUseCase 並回傳 200 OK 與 active=true 之脫敏資源
+     */
+    @Test
+    @DisplayName("情境：POST /api/credentials/{id}/reactivate 重新生效憑證成功回傳 200")
+    void testReactivateCredentialPostEndpointSuccess() throws Exception {
+        ServerCredentialGottenResult reactivated = new ServerCredentialGottenResult(
+                "cred-to-reactivate", "sftp-active", "127.0.0.1", 2222, "SFTP", "tester",
+                "******", null, null, true, false, false, true, "已重新生效", Instant.now(), Instant.now()
+        );
+
+        when(reactivateServerCredentialUseCase.reactivateCredential(any(ReactivateServerCredentialCommand.class)))
+                .thenReturn(reactivated);
+
+        mockMvc.perform(post("/api/credentials/cred-to-reactivate/reactivate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("cred-to-reactivate"))
+                .andExpect(jsonPath("$.alias").value("sftp-active"))
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(reactivateServerCredentialUseCase).reactivateCredential(any(ReactivateServerCredentialCommand.class));
     }
 }

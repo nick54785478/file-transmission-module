@@ -133,4 +133,73 @@ class ServerCredentialStorageAdapterTest {
         assertThat(config.getPassword()).isEqualTo("password");
         assertThat(config.getPrivateKey()).isEqualTo("my-decrypted-ssh-key");
     }
+
+    /**
+     * Feature: 憑證持久化與軟刪除
+     * Scenario: 刪除憑證時執行軟刪除將 active 狀態標記為 false
+     * Given: 資料庫中存在處於啟用狀態之憑證實體 (active = true)
+     * When: 呼叫 deleteById("cred-999") 業務方法
+     * Then: 實體狀態被標記為停用 (active = false)，保存至 repository，且不執行物理刪除
+     */
+    @Test
+    @DisplayName("情境：刪除憑證時執行軟刪除將 active 狀態更新為 false")
+    void testDeleteByIdPerformsSoftDelete() {
+        ServerCredentialEntity mockEntity = new ServerCredentialEntity(
+                "cred-999",
+                "my-sftp",
+                "127.0.0.1",
+                2222,
+                "SFTP",
+                "tester",
+                "ENC(pass)",
+                null,
+                null,
+                "測試"
+        );
+        assertThat(mockEntity.isActive()).isTrue();
+
+        when(serverCredentialJpaRepository.findById("cred-999")).thenReturn(Optional.of(mockEntity));
+        when(serverCredentialJpaRepository.save(any(ServerCredentialEntity.class))).thenAnswer(i -> i.getArgument(0));
+
+        storageAdapter.deleteById("cred-999");
+
+        assertThat(mockEntity.isActive()).isFalse();
+        verify(serverCredentialJpaRepository).save(mockEntity);
+    }
+
+    /**
+     * Feature: 憑證持久化與重生效
+     * Scenario: 重新生效憑證時將 active 狀態標記為 true
+     * Given: 資料庫中存在處於停用/軟刪除狀態之憑證實體 (active = false)
+     * When: 呼叫 reactivateById("cred-999") 業務方法
+     * Then: 實體狀態恢復為啟用 (active = true)，保存至 repository 並回傳 active = true 之 DTO
+     */
+    @Test
+    @DisplayName("情境：重生效憑證時將 active 狀態更新為 true 並回傳有效結果")
+    void testReactivateByIdSuccess() {
+        ServerCredentialEntity mockEntity = new ServerCredentialEntity(
+                "cred-999",
+                "my-sftp",
+                "127.0.0.1",
+                2222,
+                "SFTP",
+                "tester",
+                "ENC(pass)",
+                null,
+                null,
+                "測試"
+        );
+        mockEntity.deactivate();
+        assertThat(mockEntity.isActive()).isFalse();
+
+        when(serverCredentialJpaRepository.findById("cred-999")).thenReturn(Optional.of(mockEntity));
+        when(serverCredentialJpaRepository.save(any(ServerCredentialEntity.class))).thenAnswer(i -> i.getArgument(0));
+
+        ServerCredentialGottenResult result = storageAdapter.reactivateById("cred-999");
+
+        assertThat(result).isNotNull();
+        assertThat(result.active()).isTrue();
+        assertThat(mockEntity.isActive()).isTrue();
+        verify(serverCredentialJpaRepository).save(mockEntity);
+    }
 }

@@ -3,6 +3,7 @@ package com.example.demo.application.service;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.DeleteServerCredentialCommand;
+import com.example.demo.application.shared.command.ReactivateServerCredentialCommand;
 import com.example.demo.application.shared.command.UpdateServerCredentialCommand;
 import com.example.demo.application.shared.dto.ServerCredentialGottenResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -179,18 +180,58 @@ class ServerCredentialCommandServiceTest {
 
     /**
      * Feature: 伺服器傳輸憑證管理
-     * Scenario: 成功刪除指定 ID 之憑證
+     * Scenario: 成功軟刪除指定 ID 之憑證
      * Given: 傳入待刪除之憑證 ID
      * When: 呼叫 deleteCredential 業務方法
-     * Then: 委派儲存埠執行刪除
+     * Then: 委派儲存埠執行軟刪除
      */
     @Test
-    @DisplayName("情境：成功刪除指定憑證")
+    @DisplayName("情境：成功軟刪除指定憑證")
     void testDeleteCredentialSuccess() {
         DeleteServerCredentialCommand command = new DeleteServerCredentialCommand("cred-to-delete");
 
         commandService.deleteCredential(command);
 
         verify(serverCredentialStoragePort).deleteById("cred-to-delete");
+    }
+
+    /**
+     * Feature: 伺服器傳輸憑證管理
+     * Scenario: 成功重新啟用/生效指定 ID 之憑證
+     * Given: 傳入欲重生效之憑證 ID 之 ReactivateServerCredentialCommand
+     * When: 呼叫 reactivateCredential 業務方法
+     * Then: 委派儲存埠執行 reactivateById 並回傳重生效結果 DTO
+     */
+    @Test
+    @DisplayName("情境：成功重新啟用/生效指定憑證")
+    void testReactivateCredentialSuccess() {
+        ReactivateServerCredentialCommand command = new ReactivateServerCredentialCommand("cred-to-reactivate");
+        ServerCredentialGottenResult mockResult = new ServerCredentialGottenResult(
+                "cred-to-reactivate",
+                "sftp-reactivated",
+                "127.0.0.1",
+                2222,
+                "SFTP",
+                "admin",
+                "******",
+                null,
+                null,
+                true,
+                false,
+                false,
+                true,
+                "已重生效",
+                Instant.now(),
+                Instant.now()
+        );
+
+        when(serverCredentialStoragePort.reactivateById("cred-to-reactivate")).thenReturn(mockResult);
+
+        ServerCredentialGottenResult actual = commandService.reactivateCredential(command);
+
+        assertThat(actual).isNotNull();
+        assertThat(actual.active()).isTrue();
+        assertThat(actual.alias()).isEqualTo("sftp-reactivated");
+        verify(serverCredentialStoragePort).reactivateById("cred-to-reactivate");
     }
 }

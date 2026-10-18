@@ -1,6 +1,7 @@
 package com.example.demo.presentation.resource.in;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
 import java.io.Serializable;
 
 /**
@@ -16,6 +17,7 @@ import java.io.Serializable;
  */
 @Schema(description = "建立伺服器傳輸憑證請求資料")
 public record CreateServerCredentialResource(
+        @NotBlank(message = "憑證別名 (alias) 不能為空")
         @Schema(description = "憑證易讀別名 (唯一識別，如 mock-sftp)", example = "mock-sftp", requiredMode = Schema.RequiredMode.REQUIRED)
         String alias,
 
@@ -28,6 +30,7 @@ public record CreateServerCredentialResource(
         @Schema(description = "傳輸協定 (SFTP / FTP / FTPS)", example = "SFTP")
         String protocol,
 
+        @NotBlank(message = "登入使用者帳號 (username) 不能為空")
         @Schema(description = "登入使用者帳號", example = "tester", requiredMode = Schema.RequiredMode.REQUIRED)
         String username,
 

@@ -1,6 +1,9 @@
 package com.example.demo.infrastructure.persistence.credential.entity;
 
+import com.example.demo.application.shared.vo.EffectiveStatus;
+import com.example.demo.infrastructure.persistence.credential.converter.EffectiveStatusConverter;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
@@ -128,11 +131,12 @@ public class ServerCredentialEntity implements Serializable {
     private String description;
 
     /**
-     * 憑證啟用/有效狀態旗標 (Active Flag)
-     * <p>true 表示啟用 (可用於傳輸作業)；false 表示停用 (傳輸時若引用將會被拒絕)。</p>
+     * 憑證是否生效狀態 (Effective Status)
+     * <p>在資料庫 (is_active 欄位) 以 "Y" (生效) 或 "N" (未生效/停用) 儲存。</p>
      */
-    @Column(name = "is_active", nullable = false)
-    private boolean active = true;
+    @Convert(converter = EffectiveStatusConverter.class)
+    @Column(name = "is_active", length = 1, nullable = false)
+    private EffectiveStatus active = EffectiveStatus.EFFECTIVE;
 
     /**
      * 憑證建檔建立時間 (UTC Instant)
@@ -186,7 +190,7 @@ public class ServerCredentialEntity implements Serializable {
         this.encryptedPrivateKey = cleanOrNull(encryptedPrivateKey);
         this.encryptedPassphrase = cleanOrNull(encryptedPassphrase);
         this.description = cleanOrNull(description);
-        this.active = true;
+        this.active = EffectiveStatus.EFFECTIVE;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
     }
@@ -240,18 +244,18 @@ public class ServerCredentialEntity implements Serializable {
     }
 
     /**
-     * 啟用憑證
+     * 啟用憑證 (標記為生效狀態 Y)
      */
     public void activate() {
-        this.active = true;
+        this.active = EffectiveStatus.EFFECTIVE;
         this.updatedAt = Instant.now();
     }
 
     /**
-     * 停用憑證
+     * 停用憑證 (標記為未生效狀態 N)
      */
     public void deactivate() {
-        this.active = false;
+        this.active = EffectiveStatus.INEFFECTIVE;
         this.updatedAt = Instant.now();
     }
 
@@ -360,7 +364,26 @@ public class ServerCredentialEntity implements Serializable {
      * @return true 代表啟用，false 代表停用
      */
     public boolean isActive() {
-        return active;
+        return active != null && active.isEffective();
+    }
+
+    /**
+     * 取得憑證是否生效狀態數值物件 (EffectiveStatus)
+     *
+     * @return EffectiveStatus 數值物件 ("Y" 或 "N")
+     */
+    public EffectiveStatus getEffectiveStatus() {
+        return active != null ? active : EffectiveStatus.INEFFECTIVE;
+    }
+
+    /**
+     * 設定憑證是否生效狀態
+     *
+     * @param status 生效狀態數值物件
+     */
+    public void setEffectiveStatus(EffectiveStatus status) {
+        this.active = (status != null) ? status : EffectiveStatus.INEFFECTIVE;
+        this.updatedAt = Instant.now();
     }
 
     /**

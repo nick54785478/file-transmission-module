@@ -40,7 +40,7 @@ INSERT INTO server_credentials (
 SELECT
     'cred-mock-sftp-001', 'mock-sftp', '127.0.0.1', 2222, 'SFTP', 'tester',
     'ENC(pni0IA3kZU+rMPecevelg0aWEFag6VaAV4NvK3CBNyQEu2Fn)', NULL, NULL,
-    N'Docker 本機模擬 SFTP 伺服器 (Port: 2222, 帳密: tester / password)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    N'Docker 本機模擬 SFTP 伺服器 (Port: 2222, 帳密: tester / password)', 'Y', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 WHERE NOT EXISTS (
     SELECT 1 FROM server_credentials WHERE alias = 'mock-sftp'
 );
@@ -54,7 +54,7 @@ INSERT INTO server_credentials (
 SELECT
     'cred-mock-ftp-002', 'mock-ftp', '127.0.0.1', 2121, 'FTP', 'tester',
     'ENC(pni0IA3kZU+rMPecevelg0aWEFag6VaAV4NvK3CBNyQEu2Fn)', NULL, NULL,
-    N'Docker 本機模擬 FTP 伺服器 (Port: 2121, 被動埠: 21100-21110, 帳密: tester / password)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    N'Docker 本機模擬 FTP 伺服器 (Port: 2121, 被動埠: 21100-21110, 帳密: tester / password)', 'Y', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 WHERE NOT EXISTS (
     SELECT 1 FROM server_credentials WHERE alias = 'mock-ftp'
 );
@@ -68,7 +68,7 @@ INSERT INTO server_credentials (
 SELECT
     'cred-mock-ftps-003', 'mock-ftps', '127.0.0.1', 2122, 'FTPS', 'tester',
     'ENC(pni0IA3kZU+rMPecevelg0aWEFag6VaAV4NvK3CBNyQEu2Fn)', NULL, NULL,
-    N'Docker 本機模擬 FTPS (TLS Explicit) 伺服器 (Port: 2122, 被動埠: 21120-21130, 帳密: tester / password)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    N'Docker 本機模擬 FTPS (TLS Explicit) 伺服器 (Port: 2122, 被動埠: 21120-21130, 帳密: tester / password)', 'Y', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 WHERE NOT EXISTS (
     SELECT 1 FROM server_credentials WHERE alias = 'mock-ftps'
 );

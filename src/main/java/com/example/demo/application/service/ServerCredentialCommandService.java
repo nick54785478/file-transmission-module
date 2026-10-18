@@ -2,10 +2,12 @@ package com.example.demo.application.service;
 
 import com.example.demo.application.port.in.CreateServerCredentialUseCase;
 import com.example.demo.application.port.in.DeleteServerCredentialUseCase;
+import com.example.demo.application.port.in.ReactivateServerCredentialUseCase;
 import com.example.demo.application.port.in.UpdateServerCredentialUseCase;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.DeleteServerCredentialCommand;
+import com.example.demo.application.shared.command.ReactivateServerCredentialCommand;
 import com.example.demo.application.shared.command.UpdateServerCredentialCommand;
 import com.example.demo.application.shared.dto.ServerCredentialGottenResult;
 import org.springframework.stereotype.Service;
@@ -19,8 +21,9 @@ import java.util.Objects;
  * <ul>
  *   <li>命名規範: <code>in : ... + CommandService</code>。</li>
  *   <li>位於應用層 <code>application/service/</code>。</li>
- *   <li>實作 {@link CreateServerCredentialUseCase}、{@link UpdateServerCredentialUseCase} 與 {@link DeleteServerCredentialUseCase}。</li>
- *   <li>作為寫入異動操作 (Command) 之協調者，調用 {@link ServerCredentialStoragePort} 輸出埠執行業務規則與持久化。</li>
+ *   <li>實作 {@link CreateServerCredentialUseCase}、{@link UpdateServerCredentialUseCase}、
+ *       {@link DeleteServerCredentialUseCase} 與 {@link ReactivateServerCredentialUseCase}。</li>
+ *   <li>作為寫入異動操作 (Command) 之協調者，調用 {@link ServerCredentialStoragePort} 輸出埠執行業務規則、軟刪除、重生效與持久化。</li>
  * </ul>
  * </p>
  */
@@ -28,7 +31,8 @@ import java.util.Objects;
 public class ServerCredentialCommandService implements
         CreateServerCredentialUseCase,
         UpdateServerCredentialUseCase,
-        DeleteServerCredentialUseCase {
+        DeleteServerCredentialUseCase,
+        ReactivateServerCredentialUseCase {
 
     private final ServerCredentialStoragePort serverCredentialStoragePort;
 
@@ -55,5 +59,11 @@ public class ServerCredentialCommandService implements
     public void deleteCredential(DeleteServerCredentialCommand command) {
         Objects.requireNonNull(command, "DeleteServerCredentialCommand 不能為空");
         serverCredentialStoragePort.deleteById(command.id());
+    }
+
+    @Override
+    public ServerCredentialGottenResult reactivateCredential(ReactivateServerCredentialCommand command) {
+        Objects.requireNonNull(command, "ReactivateServerCredentialCommand 不能為空");
+        return serverCredentialStoragePort.reactivateById(command.id());
     }
 }

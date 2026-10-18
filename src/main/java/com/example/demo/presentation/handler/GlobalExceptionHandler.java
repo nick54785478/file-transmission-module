@@ -6,11 +6,13 @@ import com.example.demo.application.shared.exception.TransmissionConnectionExcep
 import com.example.demo.presentation.assembler.TransmissionResourceAssembler;
 import com.example.demo.presentation.resource.out.TransmissionErrorOccurredResource;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -203,7 +205,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 處理方法參數校驗失敗異常 (MethodArgumentNotValidException)
+     * 處理方法參數校驗失敗異常 (MethodArgumentNotValidException 與 BindException)
      * <p>
      * 攔截 Spring Validation 驗證失敗的錯誤並提取第一條提示訊息。
      * </p>
@@ -212,17 +214,51 @@ public class GlobalExceptionHandler {
      * @param request HTTP 請求物件
      * @return 400 Bad Request 與錯誤回應資料載體
      */
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<TransmissionErrorOccurredResource> handleMethodArgumentNotValidException(
-            MethodArgumentNotValidException ex,
+    @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
+    public ResponseEntity<TransmissionErrorOccurredResource> handleValidationException(
+            Exception ex,
             HttpServletRequest request
     ) {
-        String detailMessage = ex.getBindingResult().getFieldErrors().stream()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .findFirst()
-                .orElse("參數檢核未通過");
+        String detailMessage = "參數檢核未通過";
+        if (ex instanceof BindException bindEx) {
+            detailMessage = bindEx.getBindingResult().getFieldErrors().stream()
+                    .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                    .findFirst()
+                    .orElse("參數檢核未通過");
+        }
 
         log.warn("用戶端請求參數校驗失敗 [URI: {}]: {}", request.getRequestURI(), detailMessage);
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        TransmissionErrorOccurredResource errorResource = TransmissionResourceAssembler.toErrorResource(
+                status,
+                detailMessage,
+                request.getRequestURI(),
+                ex.getClass().getSimpleName()
+        );
+        return ResponseEntity.status(status).body(errorResource);
+    }
+
+    /**
+     * 處理約束校驗違反異常 (ConstraintViolationException)
+     * <p>
+     * 攔截 @Validated 觸發之路徑變數或手動驗證之約束違規。
+     * </p>
+     *
+     * @param ex 約束違反例外
+     * @param request HTTP 請求物件
+     * @return 400 Bad Request 與錯誤回應資料載體
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<TransmissionErrorOccurredResource> handleConstraintViolationException(
+            ConstraintViolationException ex,
+            HttpServletRequest request
+    ) {
+        String detailMessage = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                .findFirst()
+                .orElse(ex.getMessage());
+
+        log.warn("用戶端請求參數約束校驗失敗 [URI: {}]: {}", request.getRequestURI(), detailMessage);
         HttpStatus status = HttpStatus.BAD_REQUEST;
         TransmissionErrorOccurredResource errorResource = TransmissionResourceAssembler.toErrorResource(
                 status,

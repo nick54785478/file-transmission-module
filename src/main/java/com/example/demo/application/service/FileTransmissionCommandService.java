@@ -25,6 +25,9 @@ import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
 import java.util.Objects;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -43,6 +46,7 @@ import org.springframework.stereotype.Service;
  * </ul>
  * </p>
  */
+@Slf4j
 @Service
 public class FileTransmissionCommandService implements
         UploadFileUseCase,
@@ -81,7 +85,7 @@ public class FileTransmissionCommandService implements
      * @param fileTransmissionTaskSchedulerPort 檔案傳輸任務非同步排程輸出埠
      * @param credentialCipherPort 憑證機密加解密輸出埠
      */
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public FileTransmissionCommandService(
             FileTransmissionGatewayPort fileTransmissionGatewayPort,
             FileTransmissionTrackerPort fileTransmissionTrackerPort,
@@ -103,6 +107,7 @@ public class FileTransmissionCommandService implements
         try {
             LocalFilePath localFile = command.localFilePath();
             if (!localFile.exists() || !localFile.isFile()) {
+                log.error("本機上傳來源檔案不存在或非一般檔案: {}", localFile.getValue());
                 throw new FileTransmissionException("本機上傳來源檔案不存在或非一般檔案: " + localFile.getValue());
             }
 
@@ -142,7 +147,7 @@ public class FileTransmissionCommandService implements
             long fileSize = content.length;
             String fileName = command.filename();
 
-            // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+            // 若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
             RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
             archiveExistingRemoteFile(effectiveConfig, targetFilePath);
 

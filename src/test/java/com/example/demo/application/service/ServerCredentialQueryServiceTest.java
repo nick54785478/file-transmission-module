@@ -196,4 +196,35 @@ class ServerCredentialQueryServiceTest {
         assertThat(actualList.get(0).alias()).isEqualTo("mock-sftp");
         verify(serverCredentialStoragePort).search("sftp");
     }
+
+    /**
+     * Feature: 伺服器傳輸憑證查詢
+     * Scenario: 依 active 啟用狀態過濾憑證列表
+     * Given: 傳入 active=false 之查詢 Query
+     * When: 呼叫 listCredentials 業務方法
+     * Then: 回傳僅包含 active=false 之憑證 DTO 列表
+     */
+    @Test
+    @DisplayName("情境：依 active 狀態過濾停用/軟刪除憑證成功")
+    void testListCredentialsFilterByActiveSuccess() {
+        ListServerCredentialsQuery query = ListServerCredentialsQuery.of(null, false);
+
+        ServerCredentialGottenResult credActive = new ServerCredentialGottenResult(
+                "cred-1", "active-alias", "127.0.0.1", 2222, "SFTP", "user1",
+                "******", null, null, true, false, false, true, "啟用中", Instant.now(), Instant.now()
+        );
+        ServerCredentialGottenResult credInactive = new ServerCredentialGottenResult(
+                "cred-2", "inactive-alias", "127.0.0.1", 2121, "FTP", "user2",
+                "******", null, null, true, false, false, false, "已軟刪除", Instant.now(), Instant.now()
+        );
+
+        when(serverCredentialStoragePort.findAll()).thenReturn(List.of(credActive, credInactive));
+
+        List<ServerCredentialGottenResult> actualList = queryService.listCredentials(query);
+
+        assertThat(actualList).hasSize(1);
+        assertThat(actualList.get(0).alias()).isEqualTo("inactive-alias");
+        assertThat(actualList.get(0).active()).isFalse();
+        verify(serverCredentialStoragePort).findAll();
+    }
 }

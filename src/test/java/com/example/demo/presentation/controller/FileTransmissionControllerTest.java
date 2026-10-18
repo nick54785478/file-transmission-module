@@ -734,4 +734,83 @@ class FileTransmissionControllerTest {
                 .andExpect(jsonPath("$.transmissionId").value("tx-cred-123"))
                 .andExpect(jsonPath("$.status").value("COMPLETED"));
     }
+
+    /**
+     * Feature: Spring Validation 參數基本檢核
+     * Scenario: 呼叫 POST /api/transmission/upload 缺少 credentialId 時，觸發 Bean Validation 回傳 400 Bad Request
+     * Given: 傳入 credentialId 為空字串之 UploadFileResource 請求體
+     * When: 發送 POST 請求至 /api/transmission/upload
+     * Then: 回傳 400 Bad Request 與欄位檢核錯誤提示
+     */
+    @Test
+    @DisplayName("情境：上傳請求 credentialId 為空時驗證失敗回傳 400 Bad Request")
+    void testUploadWithBlankCredentialIdFailsValidation() throws Exception {
+        String invalidJson = """
+                {
+                    "credentialId": "",
+                    "localFilePath": "test-data/local/upload-demo.txt",
+                    "remotePath": "/upload"
+                }
+                """;
+
+        mockMvc.perform(post("/api/transmission/upload")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(invalidJson))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message", org.hamcrest.Matchers.containsString("credentialId")));
+    }
+
+    /**
+     * Feature: Spring Validation 參數基本檢核
+     * Scenario: 呼叫 POST /api/transmission/download 缺少 remoteFilePath 時回傳 400 Bad Request
+     * Given: 傳入 remoteFilePath 為空字串之 DownloadFileResource 請求體
+     * When: 發送 POST 請求至 /api/transmission/download
+     * Then: 回傳 400 Bad Request 與欄位檢核錯誤提示
+     */
+    @Test
+    @DisplayName("情境：下載請求 remoteFilePath 為空時驗證失敗回傳 400 Bad Request")
+    void testDownloadWithBlankRemotePathFailsValidation() throws Exception {
+        String invalidJson = """
+                {
+                    "credentialId": "mock-sftp",
+                    "remoteFilePath": "",
+                    "savedLocalPath": "D:/downloads/file.txt"
+                }
+                """;
+
+        mockMvc.perform(post("/api/transmission/download")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(invalidJson))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message", org.hamcrest.Matchers.containsString("remoteFilePath")));
+    }
+
+    /**
+     * Feature: Spring Validation 參數基本檢核
+     * Scenario: 呼叫 POST /api/transmission/sync 傳入非法方向值時，觸發 @Pattern 驗證失敗回傳 400 Bad Request
+     * Given: 傳入 direction 為 "INVALID_DIRECTION" 之 SyncDirectoryResource 請求體
+     * When: 發送 POST 請求至 /api/transmission/sync
+     * Then: 回傳 400 Bad Request 與方向檢核錯誤提示
+     */
+    @Test
+    @DisplayName("情境：同步請求傳入非法 direction 時驗證失敗回傳 400 Bad Request")
+    void testSyncWithInvalidDirectionFailsValidation() throws Exception {
+        String invalidJson = """
+                {
+                    "credentialId": "mock-sftp",
+                    "localDir": "D:/local/dir",
+                    "remoteDir": "/upload/dir",
+                    "direction": "INVALID_DIRECTION"
+                }
+                """;
+
+        mockMvc.perform(post("/api/transmission/sync")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(invalidJson))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message", org.hamcrest.Matchers.containsString("direction")));
+    }
 }
