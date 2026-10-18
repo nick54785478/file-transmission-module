@@ -564,77 +564,128 @@ public class SftpTransmissionClient implements TransmissionProtocolClient {
      * @throws TransmissionConnectionException 連線建立或認證異常時拋出
      * @throws FileTransmissionException       傳輸過程發生業務或 I/O 異常時拋出
      */
+    /**
+     * 封裝已連線之 SSH Session 與 ChannelSftp 資源載體 (實作 AutoCloseable 確保資源安全釋放)
+     */
+    protected static class SftpSessionHolder implements AutoCloseable {
+        private final Session session;
+        private final ChannelSftp channel;
+
+        public SftpSessionHolder(Session session, ChannelSftp channel) {
+            this.session = session;
+            this.channel = channel;
+        }
+
+        public Session getSession() {
+            return session;
+        }
+
+        public ChannelSftp getChannel() {
+            return channel;
+        }
+
+        @Override
+        public void close() {
+            if (channel != null && channel.isConnected()) {
+                channel.disconnect();
+            }
+            if (session != null && session.isConnected()) {
+                session.disconnect();
+            }
+        }
+    }
+
+    /**
+     * 建立連線、身分認證並開啟 SFTP 通道
+     *
+     * @param config 傳輸伺服器連線配置
+     * @return 已連線之會話與通道持有者
+     * @throws JSchException 當 SSH 連線、認證或通道開啟失敗時拋出
+     */
+    protected SftpSessionHolder createAndConnectSession(TransmissionServerConfig config) throws JSchException {
+        // 步驟 1：實例化 JSch 引擎
+        JSch jsch = new JSch();
+
+        // 步驟 2：SSH 金鑰認證配置 (Publickey Authentication)
+        // 若配置了 SSH 私鑰 (Private Key)，優先加入金鑰認證 (支援本機檔案路徑或純文字 PEM 內容)
+        if (config.hasPrivateKey()) {
+            String key = config.getPrivateKey();
+            byte[] passphraseBytes = config.hasPassphrase()
+                    ? config.getPassphrase().getBytes(StandardCharsets.UTF_8)
+                    : null;
+
+            File keyFile = new File(key);
+            if (keyFile.exists() && keyFile.isFile()) {
+                // 方式 A：本機實體檔案私鑰載入
+                jsch.addIdentity(keyFile.getAbsolutePath(), passphraseBytes);
+                log.info("[SFTP] 載入 SSH 私鑰檔案認證: path={}", keyFile.getAbsolutePath());
+            } else {
+                // 方式 B：記憶體純文字 PEM 私鑰位元組載入 (適用於資料庫/環境變數動態傳入)
+                byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+                jsch.addIdentity("sftp-identity", keyBytes, null, passphraseBytes);
+                log.info("[SFTP] 載入 SSH 記憶體 PEM 私鑰認證");
+            }
+        }
+
+        // 步驟 3：建立 SSH Session，若提供密碼則配置密碼認證 (Password Authentication)
+        Session session = jsch.getSession(config.getUsername(), config.getHost(), config.getPort());
+        if (config.getPassword() != null && !config.getPassword().isEmpty()) {
+            session.setPassword(config.getPassword());
+        }
+
+        // 步驟 4：設定 SSH 連線參數 (StrictHostKeyChecking)
+        // - "no"：跳過 HostKey 檢查，適用於測試環境或動態 IP 伺服器
+        // - "yes"：生產環境嚴格驗證 known_hosts，防禦中間人攻擊 (MITM)
+        Properties sessionConfig = new Properties();
+        sessionConfig.put(
+                "StrictHostKeyChecking",
+                config.isStrictHostKeyChecking() ? "yes" : "no"
+        );
+        session.setConfig(sessionConfig);
+
+        // 步驟 5：配置連線逾時 (毫秒) 並發起 TCP SSH 連線握手
+        session.setTimeout(config.getTimeoutMs());
+        session.connect();
+
+        // 步驟 6：在 SSH 通道上開闢 SFTP 子通道 (ChannelSftp)
+        Channel channel = session.openChannel("sftp");
+        channel.connect(config.getTimeoutMs());
+        ChannelSftp sftp = (ChannelSftp) channel;
+
+        return new SftpSessionHolder(session, sftp);
+    }
+
+    /**
+     * 執行 SFTP 操作的範本方法，嚴格管理連線生命週期
+     * <p>
+     * 每次操作建立獨立的 JSch Session 與 ChannelSftp，在 finally 區塊中嚴格執行關閉，保證執行緒安全。
+     * </p>
+     *
+     * @param config   傳輸伺服器連線配置
+     * @param callback 傳輸業務回呼函式
+     * @param <T>      回傳型別
+     * @return 回呼執行結果
+     * @throws TransmissionConnectionException 連線建立或認證異常時拋出
+     * @throws FileTransmissionException       傳輸過程發生業務或 I/O 異常時拋出
+     */
     private <T> T executeWithSftp(TransmissionServerConfig config, SftpCallback<T> callback) {
-        Session session = null;
-        ChannelSftp sftp = null;
+        SftpSessionHolder holder = null;
         try {
-            // 步驟 1：實例化 JSch 引擎
-            JSch jsch = new JSch();
-
-            // 步驟 2：SSH 金鑰認證配置 (Publickey Authentication)
-            // 若配置了 SSH 私鑰 (Private Key)，優先加入金鑰認證 (支援本機檔案路徑或純文字 PEM 內容)
-            if (config.hasPrivateKey()) {
-                String key = config.getPrivateKey();
-                byte[] passphraseBytes = config.hasPassphrase()
-                        ? config.getPassphrase().getBytes(StandardCharsets.UTF_8)
-                        : null;
-
-                File keyFile = new File(key);
-                if (keyFile.exists() && keyFile.isFile()) {
-                    // 方式 A：本機實體檔案私鑰載入
-                    jsch.addIdentity(keyFile.getAbsolutePath(), passphraseBytes);
-                    log.info("[SFTP] 載入 SSH 私鑰檔案認證: path={}", keyFile.getAbsolutePath());
-                } else {
-                    // 方式 B：記憶體純文字 PEM 私鑰位元組載入 (適用於資料庫/環境變數動態傳入)
-                    byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
-                    jsch.addIdentity("sftp-identity", keyBytes, null, passphraseBytes);
-                    log.info("[SFTP] 載入 SSH 記憶體 PEM 私鑰認證");
-                }
-            }
-
-            // 步驟 3：建立 SSH Session，若提供密碼則配置密碼認證 (Password Authentication)
-            session = jsch.getSession(config.getUsername(), config.getHost(), config.getPort());
-            if (config.getPassword() != null && !config.getPassword().isEmpty()) {
-                session.setPassword(config.getPassword());
-            }
-
-            // 步驟 4：設定 SSH 連線參數 (StrictHostKeyChecking)
-            // - "no"：跳過 HostKey 檢查，適用於測試環境或動態 IP 伺服器
-            // - "yes"：生產環境嚴格驗證 known_hosts，防禦中間人攻擊 (MITM)
-            Properties sessionConfig = new Properties();
-            sessionConfig.put(
-                    "StrictHostKeyChecking",
-                    config.isStrictHostKeyChecking() ? "yes" : "no"
-            );
-            session.setConfig(sessionConfig);
-
-            // 步驟 5：配置連線逾時 (毫秒) 並發起 TCP SSH 連線握手
-            session.setTimeout(config.getTimeoutMs());
-            session.connect();
-
-            // 步驟 6：在 SSH 通道上開闢 SFTP 子通道 (ChannelSftp)
-            Channel channel = session.openChannel("sftp");
-            channel.connect(config.getTimeoutMs());
-            sftp = (ChannelSftp) channel;
-
-            // 步驟 7：執行傳輸業務回呼
-            return callback.doInSftp(sftp);
+            holder = createAndConnectSession(config);
+            return callback.doInSftp(holder.getChannel());
         } catch (JSchException e) {
-            // 步驟 8：例外轉譯 - 將 JSch 底層連線或認證失敗轉譯為連線例外
+            // 例外轉譯 - 將 JSch 底層連線或認證失敗轉譯為連線例外
             log.error("[SFTP] 連線或認證失敗: host={}, port={}, user={}, err={}",
                     config.getHost(), config.getPort(), config.getUsername(), e.getMessage());
             throw new TransmissionConnectionException("SFTP 連線失敗: " + e.getMessage(), e);
         } catch (Exception e) {
-            // 步驟 9：例外轉譯 - 將傳輸業務邏輯例外轉譯為統一業務例外
+            // 例外轉譯 - 將傳輸業務邏輯例外轉譯為統一業務例外
             log.error("[SFTP] 執行操作時發生異常: {}", e.getMessage(), e);
             throw new FileTransmissionException("SFTP 操作執行失敗: " + e.getMessage(), e);
         } finally {
-            // 步驟 10：資源釋放保證 - 於 finally 區塊依序關閉 Channel 與 Session，杜絕連線數洩漏
-            if (sftp != null && sftp.isConnected()) {
-                sftp.disconnect();
-            }
-            if (session != null && session.isConnected()) {
-                session.disconnect();
+            // 資源釋放保證 - 於 finally 區塊依序關閉 Channel 與 Session，杜絕連線數洩漏
+            if (holder != null) {
+                holder.close();
             }
         }
     }
