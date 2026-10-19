@@ -82,6 +82,15 @@ public interface TransmissionProtocolClient {
     void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath);
 
     /**
+     * 取得遠端伺服器上指定檔案之位元組大小
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param remoteFilePath 遠端檔案路徑模型
+     * @return 檔案位元組大小，若檔案不存在或為目錄則回傳 -1L
+     */
+    long getRemoteFileSize(TransmissionServerConfig config, RemoteFilePath remoteFilePath);
+
+    /**
      * 測試連線
      */
     boolean testConnection(TransmissionServerConfig config);

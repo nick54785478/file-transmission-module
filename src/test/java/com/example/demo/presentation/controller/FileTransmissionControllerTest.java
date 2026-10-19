@@ -13,8 +13,10 @@ import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.exception.FileTransmissionException;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
@@ -132,7 +134,7 @@ class FileTransmissionControllerTest {
         when(serverCredentialStoragePort.resolveTransmissionConfig("mock-sftp"))
                 .thenReturn(Optional.of(MOCK_SFTP_CONFIG));
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "tx-123",
                 "SFTP",
                 "COMPLETED",
@@ -179,7 +181,7 @@ class FileTransmissionControllerTest {
         when(serverCredentialStoragePort.resolveTransmissionConfig("mock-sftp"))
                 .thenReturn(Optional.of(MOCK_SFTP_CONFIG));
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileDownloadGottenResult mockResult = new FileDownloadGottenResult(
                 "tx-dl-123",
                 "SFTP",
                 "COMPLETED",
@@ -276,7 +278,7 @@ class FileTransmissionControllerTest {
                 "Direct Memory Upload Content".getBytes()
         );
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "tx-mem-777",
                 "SFTP",
                 "COMPLETED",
@@ -340,7 +342,7 @@ class FileTransmissionControllerTest {
                 resourceJson.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "tx-swagger-888",
                 "SFTP",
                 "COMPLETED",
@@ -402,7 +404,7 @@ class FileTransmissionControllerTest {
                 resourceJson.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "tx-octet-999",
                 "SFTP",
                 "COMPLETED",
@@ -587,7 +589,7 @@ class FileTransmissionControllerTest {
     @DisplayName("情境：GET /api/transmission/status/{trackingId} 成功查詢狀態回應 200")
     void testGetStatusEndpointFound() throws Exception {
         String trackingId = "track-999";
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        TransmissionStatusGottenResult mockResult = new TransmissionStatusGottenResult(
                 trackingId,
                 "SFTP",
                 "COMPLETED",
@@ -709,7 +711,7 @@ class FileTransmissionControllerTest {
         when(serverCredentialStoragePort.resolveTransmissionConfig("mock-sftp"))
                 .thenReturn(Optional.of(MOCK_SFTP_CONFIG));
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "tx-cred-123",
                 "SFTP",
                 "COMPLETED",

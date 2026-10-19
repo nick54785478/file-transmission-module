@@ -3,9 +3,12 @@ package com.example.demo.application.service;
 import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
+import com.example.demo.application.port.out.TransmissionCompensationStoragePort;
 import com.example.demo.application.shared.command.UploadFileCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
 import com.example.demo.application.shared.exception.FileTransmissionException;
+import com.example.demo.application.shared.vo.CompensationAction;
+import com.example.demo.application.shared.vo.CompensationTask;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.TransmissionProtocol;
@@ -14,7 +17,6 @@ import com.example.demo.infrastructure.adapter.CredentialCipherAdapter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -40,7 +43,8 @@ import static org.mockito.Mockito.when;
  * <p>
  * 遵循測試規範：
  * 1. 涵蓋 UseCase 正常業務流程與錯誤異常分支驗證；
- * 2. 測試方法均撰寫 Gherkin 語法 Javadoc (Feature, Scenario, Given-When-Then)。
+ * 2. 測試方法均撰寫 Gherkin 語法 Javadoc (Feature, Scenario, Given-When-Then)；
+ * 3. 包含 BL-002 兩階段提交模擬 (2PC Staging & Atomic Commit) 與 Saga 補償機制驗證。
  * </p>
  */
 @ExtendWith(MockitoExtension.class)
@@ -52,22 +56,31 @@ class UploadFileUseCaseTest {
     @Mock
     private FileTransmissionTrackerPort fileTransmissionTrackerPort;
 
+    @Mock
+    private TransmissionCompensationStoragePort compensationStoragePort;
+
     private FileTransmissionCommandService commandService;
 
     @BeforeEach
     void setUp() {
-        commandService = new FileTransmissionCommandService(fileTransmissionGatewayPort, fileTransmissionTrackerPort, Runnable::run);
+        commandService = new FileTransmissionCommandService(
+                fileTransmissionGatewayPort,
+                fileTransmissionTrackerPort,
+                Runnable::run,
+                CredentialCipherPort.NOOP,
+                compensationStoragePort
+        );
     }
 
     /**
-     * Feature: 檔案上傳業務流程
-     * Scenario: 成功將本機有效檔案透過 SFTP 上傳至遠端伺服器
+     * Feature: 檔案上傳業務流程 (兩階段提交模擬)
+     * Scenario: 成功將本機有效檔案透過 SFTP 經由 .staging 暫存檔、校驗與原子更名上傳至遠端
      * Given: 準備有效之連線配置、本機暫存檔案與目標遠端路徑
      * When: 執行 UploadFileUseCase 的 uploadFile 方法
-     * Then: Outbound Port 成功被呼叫、回傳狀態為 COMPLETED 之結果 DTO
+     * Then: 串流寫入 .staging、驗證大小、發送 moveFile 原子更名並回傳 COMPLETED 結果
      */
     @Test
-    @DisplayName("情境：成功上傳本機檔案至遠端主機")
+    @DisplayName("情境：成功上傳本機檔案至遠端主機 (2PC Staging & Atomic Commit)")
     void testUploadFileSuccess() throws IOException {
         Path tempFile = Files.createTempFile("test-upload-", ".txt");
         Files.writeString(tempFile, "Hello SFTP Upload Test");
@@ -91,14 +104,23 @@ class UploadFileUseCaseTest {
             when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
                     .thenReturn("track-upload-123");
 
+            String expectedStagingName = ".uploaded-file.txt.staging.track-upload-123";
+            RemoteFilePath expectedStagingPath = RemoteFilePath.of("/remote/data/" + expectedStagingName);
+            RemoteFilePath expectedFinalPath = RemoteFilePath.of("/remote/data/uploaded-file.txt");
+
             doNothing().when(fileTransmissionGatewayPort).upload(
                     eq(serverConfig),
                     any(LocalFilePath.class),
                     eq(RemoteFilePath.of("/remote/data")),
-                    eq("uploaded-file.txt")
+                    eq(expectedStagingName)
             );
 
-            FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+            when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedStagingPath)))
+                    .thenReturn(true);
+            when(fileTransmissionGatewayPort.getRemoteFileSize(eq(serverConfig), eq(expectedStagingPath)))
+                    .thenReturn(Files.size(tempFile));
+
+            FileUploadGottenResult mockResult = new FileUploadGottenResult(
                     "track-upload-123",
                     "SFTP",
                     "COMPLETED",
@@ -118,7 +140,7 @@ class UploadFileUseCaseTest {
                     anyLong()
             )).thenReturn(mockResult);
 
-            FileTransmissionGottenResult result = commandService.uploadFile(command);
+            FileUploadGottenResult result = commandService.uploadFile(command);
 
             assertNotNull(result);
             assertEquals("COMPLETED", result.status());
@@ -126,13 +148,13 @@ class UploadFileUseCaseTest {
             assertEquals("uploaded-file.txt", result.fileName());
             assertTrue(result.fileSizeBytes() > 0);
 
-            verify(fileTransmissionTrackerPort).startTracking(eq(serverConfig));
-            verify(fileTransmissionGatewayPort).upload(
-                    eq(serverConfig),
-                    any(LocalFilePath.class),
-                    eq(RemoteFilePath.of("/remote/data")),
-                    eq("uploaded-file.txt")
-            );
+            // 驗證 2PC 階段追蹤調用
+            verify(fileTransmissionTrackerPort).recordStaging(eq("track-upload-123"), eq(expectedStagingPath.getValue()));
+            verify(fileTransmissionTrackerPort).recordVerifying(eq("track-upload-123"));
+            verify(fileTransmissionTrackerPort).recordCommitting(eq("track-upload-123"));
+
+            // 驗證原子更名提交
+            verify(fileTransmissionGatewayPort).moveFile(eq(serverConfig), eq(expectedStagingPath), eq(expectedFinalPath));
             verify(fileTransmissionTrackerPort).recordUploadSuccess(
                     eq("track-upload-123"),
                     any(LocalFilePath.class),
@@ -241,7 +263,8 @@ class UploadFileUseCaseTest {
                 fileTransmissionGatewayPort,
                 fileTransmissionTrackerPort,
                 Runnable::run,
-                cipherAdapter
+                cipherAdapter,
+                compensationStoragePort
         );
 
         try {
@@ -261,8 +284,11 @@ class UploadFileUseCaseTest {
             );
 
             when(fileTransmissionTrackerPort.startTracking(any())).thenReturn("track-upload-enc");
+            when(fileTransmissionGatewayPort.existsFile(any(), any())).thenReturn(true);
+            when(fileTransmissionGatewayPort.getRemoteFileSize(any(), any())).thenReturn(Files.size(tempFile));
+
             when(fileTransmissionTrackerPort.recordUploadSuccess(any(), any(), any(), any(), anyLong()))
-                    .thenReturn(new FileTransmissionGottenResult(
+                    .thenReturn(new FileUploadGottenResult(
                             "track-upload-enc",
                             "SFTP",
                             "COMPLETED",
@@ -274,7 +300,7 @@ class UploadFileUseCaseTest {
                             null
                     ));
 
-            FileTransmissionGottenResult result = serviceWithCipher.uploadFile(command);
+            FileUploadGottenResult result = serviceWithCipher.uploadFile(command);
 
             assertNotNull(result);
             assertEquals("COMPLETED", result.status());
@@ -322,11 +348,18 @@ class UploadFileUseCaseTest {
                     .thenReturn("track-upload-archive");
 
             RemoteFilePath expectedTargetFilePath = RemoteFilePath.of("/remote/data/report.txt");
-            // 模擬遠端目標檔案已存在
+            String stagingName = ".report.txt.staging.track-upload-archive";
+            RemoteFilePath expectedStagingFilePath = RemoteFilePath.of("/remote/data/" + stagingName);
+
+            // 模擬遠端 staging 檔案與既有正式檔案皆存在
+            when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedStagingFilePath)))
+                    .thenReturn(true);
             when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedTargetFilePath)))
                     .thenReturn(true);
+            when(fileTransmissionGatewayPort.getRemoteFileSize(eq(serverConfig), eq(expectedStagingFilePath)))
+                    .thenReturn(Files.size(tempFile));
 
-            FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+            FileUploadGottenResult mockResult = new FileUploadGottenResult(
                     "track-upload-archive",
                     "SFTP",
                     "COMPLETED",
@@ -346,13 +379,10 @@ class UploadFileUseCaseTest {
                     anyLong()
             )).thenReturn(mockResult);
 
-            FileTransmissionGottenResult result = commandService.uploadFile(command);
+            FileUploadGottenResult result = commandService.uploadFile(command);
 
             assertNotNull(result);
             assertEquals("COMPLETED", result.status());
-
-            // 驗證檢查檔案存在
-            verify(fileTransmissionGatewayPort).existsFile(eq(serverConfig), eq(expectedTargetFilePath));
 
             // 驗證呼叫 moveFile 將原檔案改名為備份路徑 (.bak)
             ArgumentCaptor<RemoteFilePath> backupPathCaptor = ArgumentCaptor.forClass(RemoteFilePath.class);
@@ -364,13 +394,120 @@ class UploadFileUseCaseTest {
             assertTrue(backupPathCaptor.getValue().getValue().startsWith("/remote/data/report_"));
             assertTrue(backupPathCaptor.getValue().getValue().endsWith(".bak"));
 
-            // 驗證呼叫 upload 將新檔案寫入原正規檔名
-            verify(fileTransmissionGatewayPort).upload(
+            // 驗證呼叫 moveFile 將暫存檔切換為正式檔名
+            verify(fileTransmissionGatewayPort).moveFile(
                     eq(serverConfig),
-                    any(LocalFilePath.class),
-                    eq(RemoteFilePath.of("/remote/data")),
-                    eq("report.txt")
+                    eq(expectedStagingFilePath),
+                    eq(expectedTargetFilePath)
             );
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
+
+    /**
+     * Feature: 2PC 暫存大小校驗異常觸發補償
+     * Scenario: 遠端暫存檔上傳後大小與來源檔案不相符
+     * Given: 遠端回傳之暫存檔大小小於本機檔案大小
+     * When: 執行 uploadFile 方法
+     * Then: 校驗失敗拋出例外，發起即時刪除清理暫存檔
+     */
+    @Test
+    @DisplayName("情境：遠端暫存檔大小校驗失敗時，觸發即時補償刪除並拋出例外")
+    void testUploadFileSizeMismatchTriggersCompensation() throws IOException {
+        Path tempFile = Files.createTempFile("test-size-mismatch-", ".txt");
+        Files.writeString(tempFile, "Complete File Content");
+
+        try {
+            TransmissionServerConfig serverConfig = TransmissionServerConfig.of(
+                    "192.168.1.100",
+                    22,
+                    TransmissionProtocol.SFTP,
+                    "testuser",
+                    "testpass"
+            );
+
+            UploadFileCommand command = new UploadFileCommand(
+                    serverConfig,
+                    LocalFilePath.of(tempFile.toString()),
+                    RemoteFilePath.of("/remote/data"),
+                    "mismatch.txt"
+            );
+
+            when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
+                    .thenReturn("track-upload-mismatch");
+
+            String stagingName = ".mismatch.txt.staging.track-upload-mismatch";
+            RemoteFilePath stagingPath = RemoteFilePath.of("/remote/data/" + stagingName);
+
+            when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(stagingPath))).thenReturn(true);
+            // 模擬遠端大小僅為 5 bytes (小於實際長度)
+            when(fileTransmissionGatewayPort.getRemoteFileSize(eq(serverConfig), eq(stagingPath))).thenReturn(5L);
+            when(fileTransmissionGatewayPort.deleteFile(eq(serverConfig), eq(stagingPath))).thenReturn(true);
+
+            assertThrows(FileTransmissionException.class, () -> commandService.uploadFile(command));
+
+            // 驗證觸發即時刪除暫存檔
+            verify(fileTransmissionGatewayPort).deleteFile(eq(serverConfig), eq(stagingPath));
+            verify(fileTransmissionTrackerPort).recordFailure(eq("track-upload-mismatch"), anyString());
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
+
+    /**
+     * Feature: 即時補償失敗時寫入 Saga 補償 Outbox 表
+     * Scenario: 遠端暫存檔校驗失敗且即時刪除失敗 (例如網路斷線)
+     * Given: 即時 deleteFile 拋出異常或回傳 false
+     * When: 執行 uploadFile 拋出異常
+     * Then: 呼叫 TransmissionCompensationStoragePort 將任務持久化至 Outbox
+     */
+    @Test
+    @DisplayName("情境：即時清理暫存檔失敗時，將補償任務寫入 Outbox 表")
+    void testImmediateCompensationFailureWritesToOutbox() throws IOException {
+        Path tempFile = Files.createTempFile("test-outbox-", ".txt");
+        Files.writeString(tempFile, "File Content For Outbox Test");
+
+        try {
+            TransmissionServerConfig serverConfig = TransmissionServerConfig.of(
+                    "192.168.1.100",
+                    22,
+                    TransmissionProtocol.SFTP,
+                    "testuser",
+                    "testpass"
+            );
+
+            UploadFileCommand command = new UploadFileCommand(
+                    serverConfig,
+                    LocalFilePath.of(tempFile.toString()),
+                    RemoteFilePath.of("/remote/data"),
+                    "outbox.txt"
+            );
+
+            when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
+                    .thenReturn("track-upload-outbox");
+
+            String stagingName = ".outbox.txt.staging.track-upload-outbox";
+            RemoteFilePath stagingPath = RemoteFilePath.of("/remote/data/" + stagingName);
+
+            doThrow(new RuntimeException("網路中途斷線"))
+                    .when(fileTransmissionGatewayPort)
+                    .upload(any(), any(), any(), any());
+
+            // 模擬即時刪除亦遭遇遠端連線中斷
+            when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(stagingPath))).thenReturn(true);
+            when(fileTransmissionGatewayPort.deleteFile(eq(serverConfig), eq(stagingPath))).thenReturn(false);
+
+            assertThrows(FileTransmissionException.class, () -> commandService.uploadFile(command));
+
+            // 驗證寫入 Outbox 補償日誌
+            ArgumentCaptor<CompensationTask> taskCaptor = ArgumentCaptor.forClass(CompensationTask.class);
+            verify(compensationStoragePort).saveCompensation(taskCaptor.capture());
+
+            CompensationTask savedTask = taskCaptor.getValue();
+            assertEquals("track-upload-outbox", savedTask.trackingId());
+            assertEquals(CompensationAction.DELETE_REMOTE_STAGING, savedTask.actionType());
+            assertEquals(stagingPath.getValue(), savedTask.remotePath());
         } finally {
             Files.deleteIfExists(tempFile);
         }

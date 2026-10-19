@@ -364,6 +364,26 @@ public class SftpTransmissionClient implements TransmissionProtocolClient {
         });
     }
 
+    /**
+     * 取得遠端 SFTP 伺服器上指定檔案之位元組大小
+     *
+     * @param config 傳輸伺服器連線配置
+     * @param remoteFilePath 欲查詢的遠端檔案路徑模型
+     * @return 檔案位元組大小，若檔案不存在或為目錄則回傳 -1L
+     */
+    @Override
+    public long getRemoteFileSize(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
+        return executeWithSftp(config, sftp -> {
+            try {
+                SftpATTRS attrs = sftp.stat(remoteFilePath.getValue());
+                return (attrs != null && !attrs.isDir()) ? attrs.getSize() : -1L;
+            } catch (SftpException e) {
+                log.warn("[SFTP] 取得遠端檔案大小異常: {}", e.getMessage());
+                return -1L;
+            }
+        });
+    }
+
     // ================================= 內部輔助與重構邏輯 =================================
 
     /**

@@ -1,7 +1,7 @@
 package com.example.demo.application.port.in;
 
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
 
 /**
  * 上傳記憶體檔案使用案例介面 (UploadFileFromMemoryUseCase - Inbound Port)
@@ -20,7 +20,7 @@ public interface UploadFileFromMemoryUseCase {
      * 執行記憶體檔案上傳作業 (Zero Disk I/O)
      *
      * @param command 記憶體檔案上傳命令參數
-     * @return 傳輸執行結果 DTO
+     * @return 檔案上傳專屬結果 DTO (FileUploadGottenResult)
      */
-    FileTransmissionGottenResult uploadFileFromMemory(UploadFileFromMemoryCommand command);
+    FileUploadGottenResult uploadFileFromMemory(UploadFileFromMemoryCommand command);
 }

@@ -116,6 +116,15 @@ public interface FileTransmissionGatewayPort {
     void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath);
 
     /**
+     * 取得遠端伺服器上指定檔案之位元組大小
+     *
+     * @param config 伺服器連線配置
+     * @param remoteFilePath 欲查詢的遠端檔案路徑
+     * @return 檔案位元組大小，若檔案不存在或為目錄則回傳 -1L
+     */
+    long getRemoteFileSize(TransmissionServerConfig config, RemoteFilePath remoteFilePath);
+
+    /**
      * 測試與伺服器之連線與帳密認證有效性
      *
      * @param config 伺服器連線配置

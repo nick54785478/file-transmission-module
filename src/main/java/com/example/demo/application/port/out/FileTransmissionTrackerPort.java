@@ -1,11 +1,16 @@
 package com.example.demo.application.port.out;
 
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
+import com.example.demo.application.shared.dto.ZombieSessionGottenResult;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
+import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -32,16 +37,38 @@ public interface FileTransmissionTrackerPort {
     String startTracking(TransmissionServerConfig serverConfig);
 
     /**
-     * 記錄檔案上傳成功並產生對應的傳輸結果資料載體
+     * 記錄進入 2PC 遠端暫存寫入階段 (STAGING)
+     *
+     * @param trackingId 傳輸追蹤唯一識別碼
+     * @param stagingPath 遠端暫存檔案完整路徑
+     */
+    void recordStaging(String trackingId, String stagingPath);
+
+    /**
+     * 記錄進入完整性與大小檢核階段 (VERIFYING)
+     *
+     * @param trackingId 傳輸追蹤唯一識別碼
+     */
+    void recordVerifying(String trackingId);
+
+    /**
+     * 記錄進入原子更名提交階段 (COMMITTING)
+     *
+     * @param trackingId 傳輸追蹤唯一識別碼
+     */
+    void recordCommitting(String trackingId);
+
+    /**
+     * 記錄檔案上傳成功並產生對應的專屬上傳結果資料載體
      *
      * @param trackingId 傳輸追蹤唯一識別碼
      * @param sourcePath 本機來源檔案路徑
      * @param targetPath 遠端目標目錄路徑
      * @param fileName 上傳檔案名稱
      * @param fileSizeBytes 上傳檔案大小 (bytes)
-     * @return FileTransmissionGottenResult 傳輸完成結果資料傳輸物件
+     * @return FileUploadGottenResult 檔案上傳完成結果資料傳輸物件
      */
-    FileTransmissionGottenResult recordUploadSuccess(
+    FileUploadGottenResult recordUploadSuccess(
             String trackingId,
             LocalFilePath sourcePath,
             RemoteFilePath targetPath,
@@ -50,16 +77,16 @@ public interface FileTransmissionTrackerPort {
     );
 
     /**
-     * 記錄檔案下載成功並產生對應的傳輸結果資料載體
+     * 記錄檔案下載成功並產生對應的專屬下載結果資料載體
      *
      * @param trackingId 傳輸追蹤唯一識別碼
      * @param sourcePath 遠端來源檔案路徑
      * @param targetPath 本機目標目錄路徑
      * @param fileName 下載檔案名稱
      * @param fileSizeBytes 下載檔案大小 (bytes)
-     * @return FileTransmissionGottenResult 傳輸完成結果資料傳輸物件
+     * @return FileDownloadGottenResult 檔案下載完成結果資料傳輸物件
      */
-    FileTransmissionGottenResult recordDownloadSuccess(
+    FileDownloadGottenResult recordDownloadSuccess(
             String trackingId,
             RemoteFilePath sourcePath,
             LocalFilePath targetPath,
@@ -101,6 +128,30 @@ public interface FileTransmissionTrackerPort {
      * @param trackingId 傳輸追蹤唯一識別碼
      * @return 傳輸階段結果物件 Optional (若查無資料則為 empty)
      */
-    Optional<FileTransmissionGottenResult> getTransmissionStatus(String trackingId);
+    Optional<TransmissionStatusGottenResult> getTransmissionStatus(String trackingId);
+
+    /**
+     * 查詢所有停滯超過指定閾值之殭屍任務 (供背景對帳自癒排程使用)
+     *
+     * @param threshold 停滯時間閾值 (例如 Duration.ofMinutes(30))
+     * @return 殭屍任務結果清單
+     */
+    List<ZombieSessionGottenResult> findZombieSessions(Duration threshold);
+
+    /**
+     * 記錄對帳自癒成功 (遠端檔案確認已存在完整)
+     *
+     * @param trackingId 傳輸追蹤唯一識別碼
+     * @param fileSizeBytes 遠端檔案大小
+     */
+    void recordReconciliationSuccess(String trackingId, long fileSizeBytes);
+
+    /**
+     * 記錄對帳清理失敗或逾時終止 (清理殘留臨時檔並標記失敗)
+     *
+     * @param trackingId 傳輸追蹤唯一識別碼
+     * @param errorMessage 失敗說明
+     */
+    void recordReconciliationFailure(String trackingId, String errorMessage);
 }
 

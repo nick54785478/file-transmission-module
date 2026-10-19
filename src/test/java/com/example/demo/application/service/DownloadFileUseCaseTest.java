@@ -1,7 +1,7 @@
 package com.example.demo.application.service;
 
 import com.example.demo.application.shared.command.DownloadFileCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
 import com.example.demo.application.shared.vo.LocalFilePath;
@@ -93,7 +93,7 @@ class DownloadFileUseCaseTest {
                     any(LocalFilePath.class)
             );
 
-            FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+            FileDownloadGottenResult mockResult = new FileDownloadGottenResult(
                     "track-download-123",
                     "FTP",
                     "COMPLETED",
@@ -113,7 +113,7 @@ class DownloadFileUseCaseTest {
                     anyLong()
             )).thenReturn(mockResult);
 
-            FileTransmissionGottenResult result = commandService.downloadFile(command);
+            FileDownloadGottenResult result = commandService.downloadFile(command);
 
             assertNotNull(result);
             assertEquals("COMPLETED", result.status());

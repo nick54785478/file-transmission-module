@@ -5,8 +5,11 @@ import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
@@ -397,11 +400,32 @@ public class TransmissionResourceAssembler {
     }
 
     /**
-     * 將 FileTransmissionGottenResult 轉換為 FileUploadedResource
+     * 將 FileUploadGottenResult 轉換為 FileUploadedResource
+     *
+     * @param result 專屬檔案上傳結果 DTO
+     * @return FileUploadedResource
+     */
+    public FileUploadedResource toUploadedResource(FileUploadGottenResult result) {
+        return new FileUploadedResource(
+                result.transmissionId(),
+                result.protocol(),
+                result.status(),
+                result.sourcePath(),
+                result.targetPath(),
+                result.fileName(),
+                result.fileSizeBytes(),
+                result.durationMillis(),
+                result.errorMessage()
+        );
+    }
+
+    /**
+     * 將 FileTransmissionGottenResult 轉換為 FileUploadedResource (向下相容)
      *
      * @param result DTO
      * @return FileUploadedResource
      */
+    @Deprecated
     public FileUploadedResource toUploadedResource(FileTransmissionGottenResult result) {
         return new FileUploadedResource(
                 result.transmissionId(),
@@ -417,11 +441,32 @@ public class TransmissionResourceAssembler {
     }
 
     /**
-     * 將 FileTransmissionGottenResult 轉換為 FileDownloadedResource
+     * 將 FileDownloadGottenResult 轉換為 FileDownloadedResource
+     *
+     * @param result 專屬檔案下載結果 DTO
+     * @return FileDownloadedResource
+     */
+    public FileDownloadedResource toDownloadedResource(FileDownloadGottenResult result) {
+        return new FileDownloadedResource(
+                result.transmissionId(),
+                result.protocol(),
+                result.status(),
+                result.sourcePath(),
+                result.targetPath(),
+                result.fileName(),
+                result.fileSizeBytes(),
+                result.durationMillis(),
+                result.errorMessage()
+        );
+    }
+
+    /**
+     * 將 FileTransmissionGottenResult 轉換為 FileDownloadedResource (向下相容)
      *
      * @param result DTO
      * @return FileDownloadedResource
      */
+    @Deprecated
     public FileDownloadedResource toDownloadedResource(FileTransmissionGottenResult result) {
         return new FileDownloadedResource(
                 result.transmissionId(),
@@ -474,11 +519,32 @@ public class TransmissionResourceAssembler {
     }
 
     /**
-     * 將 FileTransmissionGottenResult 轉換為 TransmissionStatusGottenResource
+     * 將 TransmissionStatusGottenResult 轉換為 TransmissionStatusGottenResource
+     *
+     * @param result 專屬傳輸狀態查詢結果 DTO
+     * @return TransmissionStatusGottenResource
+     */
+    public TransmissionStatusGottenResource toStatusResource(TransmissionStatusGottenResult result) {
+        return new TransmissionStatusGottenResource(
+                result.transmissionId(),
+                result.protocol(),
+                result.status(),
+                result.sourcePath(),
+                result.targetPath(),
+                result.fileName(),
+                result.fileSizeBytes(),
+                result.durationMillis(),
+                result.errorMessage()
+        );
+    }
+
+    /**
+     * 將 FileTransmissionGottenResult 轉換為 TransmissionStatusGottenResource (向下相容)
      *
      * @param result DTO
      * @return TransmissionStatusGottenResource
      */
+    @Deprecated
     public TransmissionStatusGottenResource toStatusResource(FileTransmissionGottenResult result) {
         return new TransmissionStatusGottenResource(
                 result.transmissionId(),

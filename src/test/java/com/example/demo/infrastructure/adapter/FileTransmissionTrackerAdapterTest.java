@@ -1,7 +1,9 @@
 package com.example.demo.infrastructure.adapter;
 
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
@@ -70,7 +72,7 @@ class FileTransmissionTrackerAdapterTest {
         String trackingId = adapter.startTracking(config);
         assertNotNull(trackingId);
 
-        FileTransmissionGottenResult result = adapter.recordUploadSuccess(
+        FileUploadGottenResult result = adapter.recordUploadSuccess(
                 trackingId,
                 LocalFilePath.of("/local/file.txt"),
                 RemoteFilePath.of("/remote/data"),
@@ -111,7 +113,7 @@ class FileTransmissionTrackerAdapterTest {
 
         String trackingId = adapter.startTracking(config);
 
-        FileTransmissionGottenResult result = adapter.recordDownloadSuccess(
+        FileDownloadGottenResult result = adapter.recordDownloadSuccess(
                 trackingId,
                 RemoteFilePath.of("/remote/file.txt"),
                 LocalFilePath.of("/local/file.txt"),
@@ -198,7 +200,7 @@ class FileTransmissionTrackerAdapterTest {
         assertEquals("網路連線逾時", lastSaved.getErrorMessage());
 
         // 再次呼叫 recordUploadSuccess 應回退至新 session 而不拋出未捕捉異常
-        FileTransmissionGottenResult result = adapter.recordUploadSuccess(
+        FileUploadGottenResult result = adapter.recordUploadSuccess(
                 trackingId,
                 LocalFilePath.of("/local/file.txt"),
                 RemoteFilePath.of("/remote/data"),
@@ -233,6 +235,34 @@ class FileTransmissionTrackerAdapterTest {
     }
 
     /**
+     * Feature: 傳輸作業生命週期追蹤與持久化
+     * Scenario: 當記錄傳輸失敗時遭遇樂觀鎖版本衝突，能自動重新查詢最新資料庫版本重試更新
+     * Given: 首次保存實體時拋出 OptimisticLockingFailureException，隨後再次查詢並保存最新實體
+     * When: 呼叫 recordFailure
+     * Then: 成功捕獲版本衝突並重試，最新實體之狀態被持久化為 FAILED
+     */
+    @Test
+    @DisplayName("情境：記錄傳輸失敗遇樂觀鎖衝突時自動重試更新")
+    void testRecordFailureRetryOnOptimisticLockException() {
+        String trackingId = "conflict-session-id";
+        TransmissionSessionEntity staleEntity = TransmissionSessionEntity.start(trackingId, "SFTP");
+        TransmissionSessionEntity freshEntity = TransmissionSessionEntity.start(trackingId, "SFTP");
+
+        when(transmissionSessionJpaRepository.findById(trackingId))
+                .thenReturn(Optional.of(staleEntity))
+                .thenReturn(Optional.of(freshEntity));
+        when(transmissionSessionJpaRepository.save(any(TransmissionSessionEntity.class)))
+                .thenThrow(new org.springframework.dao.OptimisticLockingFailureException("Version conflict"))
+                .thenReturn(freshEntity);
+
+        adapter.recordFailure(trackingId, "傳輸連線被重置");
+
+        assertEquals(TransmissionStatus.FAILED, freshEntity.getStatus());
+        assertEquals("傳輸連線被重置", freshEntity.getErrorMessage());
+        verify(transmissionSessionJpaRepository, org.mockito.Mockito.times(2)).save(any(TransmissionSessionEntity.class));
+    }
+
+    /**
      * Feature: 傳輸狀態查詢
      * Scenario: 成功從記憶體與資料庫查詢傳輸狀態
      * Given: 準備記憶體或資料庫存在之傳輸作業紀錄
@@ -252,7 +282,7 @@ class FileTransmissionTrackerAdapterTest {
         String trackingId = adapter.startTracking(config);
 
         // 1. 從記憶體查詢進行中狀態
-        Optional<FileTransmissionGottenResult> inProgressResult = adapter.getTransmissionStatus(trackingId);
+        Optional<TransmissionStatusGottenResult> inProgressResult = adapter.getTransmissionStatus(trackingId);
         assertTrue(inProgressResult.isPresent());
         assertEquals(trackingId, inProgressResult.get().transmissionId());
         assertEquals("IN_PROGRESS", inProgressResult.get().status());
@@ -274,14 +304,14 @@ class FileTransmissionTrackerAdapterTest {
         );
         when(transmissionSessionJpaRepository.findById(historicalId)).thenReturn(Optional.of(historicalEntity));
 
-        Optional<FileTransmissionGottenResult> histResult = adapter.getTransmissionStatus(historicalId);
+        Optional<TransmissionStatusGottenResult> histResult = adapter.getTransmissionStatus(historicalId);
         assertTrue(histResult.isPresent());
         assertEquals(historicalId, histResult.get().transmissionId());
         assertEquals("COMPLETED", histResult.get().status());
         assertEquals(512L, histResult.get().fileSizeBytes());
 
         // 3. 查無紀錄
-        Optional<FileTransmissionGottenResult> emptyResult = adapter.getTransmissionStatus("unknown-id");
+        Optional<TransmissionStatusGottenResult> emptyResult = adapter.getTransmissionStatus("unknown-id");
         assertTrue(emptyResult.isEmpty());
     }
 }

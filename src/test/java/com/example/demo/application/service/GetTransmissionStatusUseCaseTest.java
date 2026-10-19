@@ -2,7 +2,7 @@ package com.example.demo.application.service;
 
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +56,7 @@ class GetTransmissionStatusUseCaseTest {
         String trackingId = "track-12345";
         GetTransmissionStatusQuery query = GetTransmissionStatusQuery.of(trackingId);
 
-        FileTransmissionGottenResult expectedResult = new FileTransmissionGottenResult(
+        TransmissionStatusGottenResult expectedResult = new TransmissionStatusGottenResult(
                 trackingId,
                 "SFTP",
                 "COMPLETED",
@@ -70,7 +70,7 @@ class GetTransmissionStatusUseCaseTest {
 
         when(fileTransmissionTrackerPort.getTransmissionStatus(trackingId)).thenReturn(Optional.of(expectedResult));
 
-        Optional<FileTransmissionGottenResult> actualResult = queryService.getTransmissionStatus(query);
+        Optional<TransmissionStatusGottenResult> actualResult = queryService.getTransmissionStatus(query);
 
         assertTrue(actualResult.isPresent());
         assertEquals("track-12345", actualResult.get().transmissionId());
@@ -94,7 +94,7 @@ class GetTransmissionStatusUseCaseTest {
 
         when(fileTransmissionTrackerPort.getTransmissionStatus(trackingId)).thenReturn(Optional.empty());
 
-        Optional<FileTransmissionGottenResult> actualResult = queryService.getTransmissionStatus(query);
+        Optional<TransmissionStatusGottenResult> actualResult = queryService.getTransmissionStatus(query);
 
         assertFalse(actualResult.isPresent());
         verify(fileTransmissionTrackerPort).getTransmissionStatus(trackingId);

@@ -2,8 +2,11 @@ package com.example.demo.infrastructure.persistence.transmission.repository;
 
 import com.example.demo.infrastructure.persistence.transmission.entity.TransmissionSessionEntity;
 import com.example.demo.infrastructure.persistence.transmission.vo.TransmissionStatus;
+import java.time.Instant;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -36,4 +39,17 @@ public interface TransmissionSessionJpaRepository extends JpaRepository<Transmis
      * @return 符合協定之傳輸實體清單
      */
     List<TransmissionSessionEntity> findByProtocol(String protocol);
+
+    /**
+     * 查詢所有處於指定狀態且發起時間早於指定閾值之殭屍停滯傳輸任務 (供背景對帳自癒引擎掃描)
+     *
+     * @param status 欲掃描之傳輸狀態 (通常為 IN_PROGRESS)
+     * @param threshold 超時時間閾值 (例如 Instant.now().minus(30, ChronoUnit.MINUTES))
+     * @return 停滯之傳輸作業實體清單
+     */
+    @Query("SELECT s FROM TransmissionSessionEntity s WHERE s.status = :status AND s.startedAt < :threshold")
+    List<TransmissionSessionEntity> findZombies(
+            @Param("status") TransmissionStatus status,
+            @Param("threshold") Instant threshold
+    );
 }

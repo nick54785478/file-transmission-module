@@ -58,71 +58,226 @@
 ### [BL-002] 檔案傳輸與資料庫狀態最終一致性與補償機制 (Eventual Consistency & Compensation)
 
 * **項目類別**：可靠性與資料一致性 (Data Consistency / Reliability / Architecture Optimization)
-* **當前狀態**：規劃中 / 待排程 (Planned / Backlog)
+* **當前狀態**：已完成 (Completed)
 * **優先級別**：High (高)
-* **紀錄日期**：2026-10-17
-
-#### 1. 背景與問題分析 (Background & Problem Analysis)
-本模組在執行檔案傳輸時，涉及兩大異質系統的協同運作：
-1. **本機關聯式資料庫 (RDBMS)**：記錄傳輸工作階段 (`TransmissionSessionEntity`) 的生命週期狀態 (`IN_PROGRESS`, `COMPLETED`, `FAILED`)。
-2. **遠端通訊協定伺服器 (FTP / FTPS / SFTP)**：執行實體檔案位元組的網路 I/O 寫入。
-
-##### 核心挑戰：
-* **無分散式交易支援**：外部 FTP/SFTP 伺服器不支援 2PC (兩階段提交) 或 XA 分散式事務，本質上屬於雙寫問題 (Dual-Write Problem)，在理論上無法單靠本機資料庫交易達到「強一致性 (Strict ACID Consistency)」。
-* **嚴禁長事務 (@Transactional Anti-Pattern)**：若直接在 `uploadFile` 上標註 `@Transactional`，會導致資料庫連線在檔案長傳輸期間被鎖死占用（導致連線池枯竭）；且一旦傳輸失敗拋出例外造成 Transaction Rollback，會將原先寫入的 `IN_PROGRESS` 稽核軌跡抹除，造成嚴重的紀錄丟失。
+* **紀錄日期**：2026-10-17 (2026-10-19 實作完成，185 筆單元與整合測試全數通過，維護手冊參見 [EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md](doc/maintainance/EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md))
 
 ---
 
-#### 2. 潛在不一致情境 (Failure Scenarios & Risks)
-1. **上傳成功但 DB 更新失敗（孤兒檔案 Orphan Files）**：
-   - 遠端伺服器已完整接收檔案，但在發動 `recordUploadSuccess()` 時遭遇 DB 暫時性斷線、鎖逾時或應用程式重啟，導致 DB 狀態停滯在 `IN_PROGRESS`，客戶端誤判傳輸失敗。
-2. **傳輸中途中斷（半截/損毀檔案 Corrupt Files）**：
-   - 檔案傳輸到一半（如傳送 60%）發生網路中斷，Catch 區塊將 DB 標記為 `FAILED`，但遠端已留下未完成的殘缺檔案，可能被下游系統錯誤讀取。
-3. **伺服器非預期崩潰（狀態永遠滯留）**：
-   - 應用服務在傳輸進行中因斷電或 OOM 終止，未進入 Catch 區塊，該筆紀錄將永遠留在 `IN_PROGRESS`。
+#### 1. 背景與異質系統雙寫挑戰 (Background & Dual-Write Challenge)
+
+本模組在執行檔案傳輸時，核心架構涉及兩個本質完全不同的異質系統協同作業：
+1. **本機關聯式資料庫 (RDBMS - MSSQL)**：以 ACID 保證紀錄傳輸工作階段實體 (`TransmissionSessionJpaEntity`) 的任務狀態、審計軌跡與耗時統計。
+2. **遠端通訊協定端點 (Network File Storage - FTP / FTPS / SFTP)**：透過 Socket 網路資料通道串流寫入實體檔案位元組。
+
+##### 核心技術困境：
+* **無分散式交易支援 (No 2PC / XA across File Protocols)**：
+  標準 FTP 與 SFTP 協定伺服器不具備分散式交易協同能力（無兩階段提交 2PC 或 XA 事務機制）。此場景本質上屬於經典的**分散式雙寫問題 (Distributed Dual-Write Problem)**，在理論上無法單靠本機資料庫交易達到跨網路的「強一致性 (Strict ACID Consistency)」。
+* **長事務反模式 (@Transactional Anti-Pattern)**：
+  若在傳輸 UseCase（如 `UploadFileUseCase` 或 `SyncDirectoryUseCase`）上強制標註 `@Transactional`，會引發兩大系統性風險：
+  1. **資料庫連線池耗盡 (Connection Pool Exhaustion)**：檔案傳輸依賴遠端網路 I/O，遇到大檔案或網路延遲時耗時可達數十秒至數分鐘，資料庫連線將在整個傳輸期間被鎖死占用，極易拖垮整體微服務系統。
+  2. **審計紀錄被抹煞 (Audit Trace Loss on Rollback)**：傳輸失敗拋出例外觸發事務 Rollback 時，原先寫入的初始狀態會被資料庫撤銷，導致系統失去該筆失敗傳輸的完整稽核軌跡。
+* **架構決策原則**：
+  依據 CAP 定理與微服務設計實踐，本模組**放棄強一致性，全面採用「最終一致性 (Eventual Consistency)」配合「Saga 補償交易 (Compensating Transaction)」與「自癒對帳引擎 (Reconciliation Engine)」**。
 
 ---
 
-#### 3. 規劃之技術解決方案與實作藍圖 (Technical Solutions & Roadmap)
+#### 2. 潛在不一致情境與風險矩陣 (Failure Scenarios & Risk Matrix)
 
-針對上述問題，將透過**最終一致性 (Eventual Consistency)**、**暫存與原子重命名**與**補償交易 (Saga Pattern)** 達成高可靠保證：
+檔案傳輸全生命週期中可能發生的 5 大不一致異常情境：
 
-##### (1) 遠端暫存檔與原子重命名 (Staging & Atomic Rename)
-* **作法**：檔案上傳時不直接寫入正式檔名（如 `data.txt`），而是寫入暫存檔名（如 `data.txt.tmp.<trackingId>`）。
-* **效益**：
-  * 全部資料傳輸且校驗完畢後，透過 SFTP/FTP 協定的 `RENAME` 指令進行原子更名。
-  * 傳輸中途中斷時，遠端僅殘留 `.tmp` 暫存檔，不會污染正式業務檔案。
+| 編號 | 異常情境 | 發生原因與時序 | 系統現狀與潛在風險 | 解決策略 |
+| :--- | :--- | :--- | :--- | :--- |
+| **F-01** | **孤兒檔案<br>(Orphan Files)** | 遠端檔案已完整寫入，但回寫 DB 更新 `COMPLETED` 時遭遇資料庫短暫斷線、鎖逾時或應用崩潰。 | 遠端正式目錄已存在該檔，但 DB 狀態停滯在 `IN_PROGRESS` 或標記為 `FAILED`。調用方誤判傳輸失敗而發起重試，造成檔案覆蓋或重複處理。 | **背景定時對帳自癒**：比對遠端檔案完整性，確認合格後自動補齊 DB 狀態至 `COMPLETED`。 |
+| **F-02** | **半截殘缺檔案<br>(Dirty Truncated Files)** | 檔案傳輸到一半（如傳送 70%）遭遇網路中斷或遠端磁碟滿載，傳輸終止。 | 遠端目錄遺留未傳完之殘缺壞檔。若下游排程系統僅根據檔名觸發讀取，將解析出破損資料。 | **暫存檔隔離 + 原子更名**：傳輸時一律寫入臨時檔，全部傳完並校驗後才原子切換為正式檔名。 |
+| **F-03** | **殭屍停滯任務<br>(Zombie Sessions)** | 應用程式伺服器遭遇 SIGKILL、容器 OOM 或非預期斷電，未進入 `catch` 或 `finally` 區塊。 | DB 該筆工作階段永遠停留在 `IN_PROGRESS`，缺乏終態，導致監控警報誤報且阻礙後續排程。 | **過期探測清掃 Job**：掃描超時仍未推進的任務，主動探測遠端狀態並轉為終態。 |
+| **F-04** | **目錄同步破碎<br>(Partial Sync Inconsistency)** | 目錄同步進行中（例如 100 筆檔案傳輸了 35 筆），傳輸中途網路斷線。 | 目錄狀態部分更新，DB 標記為 `FAILED`。缺乏子項目級別的狀態檢查點，重試時可能重複傳輸或無法對帳。 | **目錄檢查點機制 (Checkpoints)**：記錄單檔項目級別的傳輸成果，支援增量接續傳輸。 |
+| **F-05** | **補償動作自我失效<br>(Secondary Failure)** | 傳輸失敗進入 `catch` 區塊發起補償（刪除遠端暫存檔），但此時遠端連線已完全斷絕。 | 補償動作本身失敗，遠端暫存檔永久殘留，長期累積將耗盡遠端磁碟空間與 inode。 | **本地補償日誌表 (Compensation Outbox)**：將未完成的補償任務持久化，由背景工作指數退避重試。 |
 
-##### (2) 異常捕獲與清理補償機制 (Compensating Transaction)
-* **作法**：在 `FileTransmissionCommandService` 的 `catch (Exception ex)` 區塊中，發動業務補償呼叫：
+---
+
+#### 3. 狀態機模型與生命週期 (State Machine & Transition Flow)
+
+傳輸任務具備完整且不可逆的狀態流轉模型，引入明確的過渡態與補償態：
+
+```mermaid
+stateDiagram-v2
+    [*] --> INITIALIZED : 建立傳輸任務載體
+    INITIALIZED --> IN_PROGRESS : 寫入 DB 並開闢連線通道
+    
+    state IN_PROGRESS {
+        [*] --> STAGING : 串流寫入遠端臨時檔 (.staging)
+        STAGING --> VERIFYING : 傳輸完畢，發起大小與校驗檢核
+        VERIFYING --> COMMITTING : 校驗通過，發送 RENAME 原子更名
+        COMMITTING --> [*] : 原子切換成功
+    }
+
+    IN_PROGRESS --> COMPLETED : 寫入 DB 傳輸成功審計紀錄
+    
+    IN_PROGRESS --> COMPENSATING : 捕捉傳輸/更名/校驗異常
+    
+    state COMPENSATING {
+        [*] --> CLEANUP_REMOTE : 發起遠端臨時檔刪除
+        CLEANUP_REMOTE --> CLEANUP_SUCCESS : 刪除成功
+        CLEANUP_REMOTE --> CLEANUP_FAILED : 遠端斷線，寫入補償日誌表 (Outbox)
+    }
+
+    COMPENSATING --> FAILED : 標記終態 FAILED (保留錯誤代碼與耗時)
+    
+    IN_PROGRESS --> ZOMBIE_DETECTED : 伺服器崩潰，任務超過超時臨界值 (如 30min)
+    ZOMBIE_DETECTED --> RECONCILING : 背景對帳引擎啟動探測
+    
+    state RECONCILING {
+        [*] --> CHECK_REMOTE : 探測遠端正式檔與臨時檔
+        CHECK_REMOTE --> PROMOTE_SUCCESS : 正式檔完整存在且校驗正確
+        CHECK_REMOTE --> PURGE_TEMP : 正式檔不存在，清除殘留臨時檔
+    }
+    
+    RECONCILING --> COMPLETED : 自動自癒修復成功 (Self-Healed)
+    RECONCILING --> FAILED : 自動清理完畢並標記為逾時失敗
+    
+    COMPENSATING --> NEEDS_MANUAL_INTERVENTION : 重試超過上限，發送運維警報
+    FAILED --> [*]
+    COMPLETED --> [*]
+    NEEDS_MANUAL_INTERVENTION --> [*]
+```
+
+---
+
+#### 4. 六大核心技術機制與實作藍圖 (Technical Implementation Blueprints)
+
+##### (1) 機制一：兩階段提交模擬 —— 遠端暫存與原子更名 (Staging & Atomic Commit via 2PC)
+* **設計精神**：模擬分散式事務的 Prepare 與 Commit 兩階段，杜絕下游讀取到半截檔案。
+* **命名慣例 (Naming Convention)**：
+  - 正式檔名：`report_20261019.csv`
+  - 暫存檔名：`.report_20261019.csv.staging.${trackingId}`（前方帶 `.` 使其在 Linux/Unix SFTP 伺服器上預設為隱藏檔案）。
+* **實作流程**：
+  1. **Phase 1 (Prepare)**：串流寫入至暫存檔名。若中途斷線，遠端僅存在帶有 `.staging` 之後綴檔。
+  2. **Phase 2 (Verify)**：寫入完成後，透過 `GatewayPort.getRemoteFileInfo()` 取得暫存檔實際大小。
+  3. **Phase 3 (Commit)**：確認大小與來源一致後，發出協定層 `RENAME` 指令，將暫存檔原子改名為正式檔名。
+
+##### (2) 機制二：完整性多層校驗防線 (Integrity Verification)
+* **大小校驗 (Size Check)**：所有協定通用的第一道防線，比對本機傳送位元組與遠端伺服器回傳之 `stat.getSize()`。
+* **雜湊校驗 (Checksum / Hash)**：
+  - SFTP 協定：若遠端支援 `check-file` (RFC 擴展) 或可透過 SSH 執行 `sha256sum`，進行二進位雜湊比對。
+  - FTP / FTPS 協定：若遠端支援 `HASH` 或 `MD5` 命令 (RFC 7151)，執行遠端校驗碼比對。
+  - 降級策略：若遠端伺服器不支援校驗碼擴展，維持嚴格大小精確比對（Byte-level Precision）。
+
+##### (3) 機制三：Saga 補償交易與本地補償日誌表 (Saga Pattern & Local Compensation Outbox)
+* **設計精神**：解決「補償動作本身失敗」導致的資源洩漏問題。
+* **資料表規劃 (`transmission_compensation_log`)**：
+  ```sql
+  CREATE TABLE transmission_compensation_log (
+      compensation_id   BIGINT IDENTITY(1,1) PRIMARY KEY,
+      tracking_id       NVARCHAR(64) NOT NULL,
+      action_type       NVARCHAR(32) NOT NULL, -- DELETE_REMOTE_STAGING, RENAME_BACK, DELETE_LOCAL_ORPHAN
+      credential_id     NVARCHAR(64) NOT NULL,
+      remote_path       NVARCHAR(1000) NOT NULL,
+      retry_count       INT NOT NULL DEFAULT 0,
+      max_retries       INT NOT NULL DEFAULT 5,
+      status            NVARCHAR(32) NOT NULL, -- PENDING, RETRYING, SUCCESS, ABANDONED
+      error_message     NVARCHAR(MAX) NULL,
+      next_retry_at     DATETIME2 NOT NULL,
+      created_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+      updated_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+  CREATE INDEX idx_comp_pending ON transmission_compensation_log (status, next_retry_at);
+  ```
+* **運作邏輯**：
+  1. 當傳輸發生異常且遠端即時清理失敗時，將補償指令寫入此表（狀態為 `PENDING`）。
+  2. 背景補償排程 (`CompensationWorker`) 依據 `next_retry_at` 指數退避 (Exponential Backoff: 1m, 2m, 5m, 10m, 30m) 進行重試。
+  3. 超過最大重試次數後標記為 `ABANDONED` 並發送監控告警通知維運人員。
+
+##### (4) 機制四：背景對帳引擎與自癒排程 (Reconciliation & Self-Healing Engine)
+* **設計精神**：處理伺服器非預期崩潰（宕機、OOM）產生的殭屍任務。
+* **對帳演算法 (Reconciliation Algorithm)**：
   ```java
-  try {
-      fileTransmissionGatewayPort.deleteRemoteFileIfExists(command.serverConfig(), tempFilePath);
-  } catch (Exception cleanupEx) {
-      log.warn("補償清理遠端暫存檔失敗 [trackingId: {}]: {}", trackingId, cleanupEx.getMessage());
+  @Scheduled(fixedDelayString = "${transmission.reconciliation.interval-ms:600000}") // 預設每 10 分鐘
+  public void sweepZombieSessions() {
+      Instant threshold = Instant.now().minus(Duration.ofMinutes(30));
+      List<TransmissionSessionJpaEntity> zombies = sessionRepo.findZombies(TransmissionStatus.IN_PROGRESS, threshold);
+
+      for (TransmissionSessionJpaEntity session : zombies) {
+          reconcileSingleSession(session);
+      }
   }
   ```
-* **效益**：發生網路逾時或異常時，主動清除遠端可能已建立的不完整檔案。
+* **單筆探測邏輯**：
+  1. 連線至遠端主機檢查正式檔案：
+     - 若正式檔案存在且大小完全吻合 &rarr; 判定傳輸實質成功，自動將 DB 更新為 `COMPLETED`，附註 `[RECONCILED_SUCCESS]`。
+  2. 若正式檔案不存在，檢查是否存在 `.staging` 暫存檔：
+     - 若存在暫存檔 &rarr; 刪除暫存檔，將 DB 更新為 `FAILED`，錯誤原因註記 `[ZOMBIE_TIMEOUT_PURGED]`。
+  3. 若兩者皆不存在 &rarr; 直接將 DB 更新為 `FAILED`，註記 `[ABRUPT_TERMINATION]`。
 
-##### (3) 檔案大小與雜湊校驗 (Integrity Verification)
-* **作法**：檔案上傳完成後，調用協定端點取得遠端檔案大小（Byte Length）或校驗碼（Checksum / Hash），確認與本機來源檔案完全一致後，才觸發 `recordUploadSuccess()`。
+##### (5) 機制五：目錄同步斷點檢查點 (Directory Sync Checkpointing)
+* **設計精神**：防止目錄包含數百個檔案時，因單一檔案失敗導致整個目錄判定失敗且重新傳輸。
+* **實作方式**：
+  - 為目錄同步引進子項目紀錄表 (`transmission_session_item`)：
+    記錄每個子檔案的相對路徑、大小、個別傳輸狀態 (`PENDING`, `SUCCESS`, `SKIPPED`, `FAILED`)。
+  - 當同步中途中斷再次觸發時，比對子項目表與時間戳記，跳過已傳輸成功之項目，僅針對未完成之檔案續傳。
 
-##### (4) 背景定時對帳與逾時自癒排程 (Reconciliation & Self-Healing Job)
-* **作法**：建立背景排程 Job（例如每 10 分鐘執行一次），掃描逾期（例如建立超過 30 分鐘）仍處於 `IN_PROGRESS` 的任務：
-  1. 連線至遠端主機探測：
-     - 若正式檔案完整存在且大小相符 &rarr; 自動補齊狀態為 `COMPLETED`。
-     - 若僅有殘留暫存檔或檔案不存在 &rarr; 清除暫存檔並標記為 `FAILED (TIMEOUT_RECONCILED)`。
-* **效益**：即使應用程式發生斷電或宕機，亦能具備自動對帳與自癒修復能力。
+##### (6) 機制六：樂觀鎖保護並發狀態 (Optimistic Locking)
+* 在 `TransmissionSessionJpaEntity` 增加 `@Version private Long version;` 欄位。
+* 當背景對帳引擎在掃描並嘗試改寫狀態時，若剛好與傳輸完成的非同步工作執行緒發生競爭，樂觀鎖機制將阻斷衝突並引發重試，確保狀態流轉絕對具備原子性。
 
 ---
 
-#### 4. 影響範圍與元件變更評估 (Affected Components)
-* **應用層輸出埠 (Outbound Port)**：
-  - `FileTransmissionGatewayPort`：擴充 `deleteRemoteFileIfExists`、`renameRemoteFile`、`getRemoteFileSize`。
-* **基礎設施層協定適配器 (Adapters & Clients)**：
-  - `FileTransmissionGatewayAdapter`、`SftpTransmissionClient`、`FtpTransmissionClient`、`FtpsTransmissionClient` 實作對應原子重命名與刪除指令。
-* **應用層服務 (Application Service)**：
-  - `FileTransmissionCommandService`：整合暫存上傳、更名與例外清理補償。
+#### 5. 資料庫綱要異動規格 (Database Schema DDL)
+
+##### (1) `transmission_session` 資料表擴充
+```sql
+ALTER TABLE transmission_session ADD version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE transmission_session ADD stage NVARCHAR(32) NULL; -- STAGING, VERIFYING, COMMITTING
+ALTER TABLE transmission_session ADD checksum NVARCHAR(128) NULL;
+ALTER TABLE transmission_session ADD staging_path NVARCHAR(1000) NULL;
+ALTER TABLE transmission_session ADD reconciled BIT NOT NULL DEFAULT 0;
+```
+
+##### (2) `transmission_session_item` 新增子項目明細表
+```sql
+CREATE TABLE transmission_session_item (
+    item_id           BIGINT IDENTITY(1,1) PRIMARY KEY,
+    session_id        BIGINT NOT NULL,
+    file_name         NVARCHAR(255) NOT NULL,
+    relative_path     NVARCHAR(1000) NOT NULL,
+    file_size_bytes   BIGINT NOT NULL,
+    status            NVARCHAR(32) NOT NULL, -- SUCCESS, FAILED, SKIPPED
+    error_message     NVARCHAR(MAX) NULL,
+    transferred_at    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT fk_session_item FOREIGN KEY (session_id) REFERENCES transmission_session(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_item_session ON transmission_session_item (session_id);
+```
+
+---
+
+#### 6. 六角形架構影響範圍與元件異動清單 (Hexagonal Architecture Impact Analysis)
+
+本重構遵循 DDD 與六角形架構設計準則，確保領域與應用層邊界純粹：
+
+| 架構分層 | 模組與檔案位置 | 具體職責與變更內容 |
+| :--- | :--- | :--- |
+| **應用層 Inbound Ports**<br>`application/port/in/` | `ReconcileTransmissionUseCase.java`<br>`ProcessCompensationUseCase.java` | 定義對帳掃描與補償執行的業務合約介面。 |
+| **應用層 Outbound Ports**<br>`application/port/out/` | `FileTransmissionGatewayPort.java`<br>`TransmissionCompensationStoragePort.java` | 1. 擴充 Gateway 介面：`renameRemoteFile`、`deleteRemoteFileIfExists`、`getRemoteFileSize`。<br>2. 宣告補償日誌與檢查點的持久化合約。 |
+| **應用層服務**<br>`application/service/` | `FileTransmissionCommandService.java`<br>`TransmissionCompensationService.java`<br>`TransmissionReconciliationService.java` | 1. 編排「暫存上傳 &rarr; 校驗 &rarr; 原子重命名」業務流水線。<br>2. 實作例外捕捉後的即時補償與 Outbox 轉發。<br>3. 實作定時對帳與自癒邏輯。 |
+| **應用層共享數值物件**<br>`application/shared/vo/` | `TransmissionStage.java`<br>`IntegrityCheckResult.java`<br>`CompensationAction.java` | 定義傳輸階段過渡態、完整性檢查結果與補償行為類型。 |
+| **基礎設施層適配器**<br>`infrastructure/adapter/` | `FileTransmissionGatewayAdapter.java`<br>`TransmissionCompensationStorageAdapter.java` | 呼叫技術客戶端執行實際的更名與刪除，並對接 JPA Repository。 |
+| **傳輸協定客戶端**<br>`infrastructure/transmission/client/impl/` | `FtpTransmissionClient.java`<br>`FtpsTransmissionClient.java`<br>`SftpTransmissionClient.java` | 封裝各協定底層的原子更名指令：<br>- SFTP：`ChannelSftp.rename()`<br>- FTP / FTPS：`FTPClient.rename()` |
+| **基礎設施持久層**<br>`infrastructure/persistence/` | `TransmissionCompensationJpaEntity.java`<br>`TransmissionSessionItemJpaEntity.java` | 提供補償日誌表與檢查點明細表之 Spring Data JPA Repository 與 Entity。 |
+| **配置層**<br>`config/` | `ReconciliationSchedulerConfig.java` | 配置 `@EnableScheduling`、對帳執行緒池與時間間隔參數。 |
+
+---
+
+#### 7. 驗證與測試策略 (Testing & Verification Strategy)
+
+* **故障注入單元測試 (Fault-Injection Unit Tests)**：
+  - 模擬串流寫入到 50% 時拋出 `SocketTimeoutException`，斷言觸發補償清理並驗證遠端暫存檔被刪除。
+  - 模擬更名 (`rename`) 失敗時，斷言寫入 `transmission_compensation_log`。
+* **併發競態整合測試 (Concurrent Race-Condition Tests)**：
+  - 模擬主執行緒寫入 `COMPLETED` 同時背景對帳掃描該筆紀錄，驗證 `@Version` 樂觀鎖能正確處理 `OptimisticLockingFailureException`。
+* **對帳自癒場景測試 (Self-Healing Job Tests)**：
+  - 插入一筆 40 分鐘前建立且仍處於 `IN_PROGRESS` 之測試資料，Mock 遠端檔案存在，觸發對帳 Job 後驗證狀態正確自癒晉升為 `COMPLETED`。
+
 
 ---
 

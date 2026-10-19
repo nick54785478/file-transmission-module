@@ -1,7 +1,7 @@
 package com.example.demo.application.port.in;
 
 import com.example.demo.application.shared.command.UploadFileCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
 
 /**
  * 上傳檔案使用案例介面 (UploadFileUseCase - Inbound Port)
@@ -16,7 +16,7 @@ public interface UploadFileUseCase {
      * 執行檔案上傳作業
      *
      * @param command 上傳命令參數
-     * @return 傳輸執行結果 DTO
+     * @return 檔案上傳專屬結果 DTO (FileUploadGottenResult)
      */
-    FileTransmissionGottenResult uploadFile(UploadFileCommand command);
+    FileUploadGottenResult uploadFile(UploadFileCommand command);
 }

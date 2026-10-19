@@ -2,7 +2,7 @@
 
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://www.oracle.com/java/)
 [![Spring Boot 3](https://img.shields.io/badge/Spring%20Boot-3.x-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![Tests Passing](https://img.shields.io/badge/Tests-169%20Passed-success.svg)](#本地測試與驗證)
+[![Tests Passing](https://img.shields.io/badge/Tests-185%20Passed-success.svg)](#本地測試與驗證)
 [![Architecture](https://img.shields.io/badge/Architecture-Hexagonal%20%2F%20Clean-blue.svg)](#架構分層設計-clean-architecture--hexagonal-architecture)
 [![License](https://img.shields.io/badge/License-Apache%202.0-lightgrey.svg)](LICENSE)
 
@@ -347,4 +347,29 @@ transmission.security.secret-key=${TRANSMISSION_SECRET_KEY:}
 # OpenAPI & Swagger UI
 springdoc.swagger-ui.path=/swagger-ui.html
 springdoc.swagger-ui.enabled=true
+
+# 最終一致性與自癒對帳排程 (BL-002)
+transmission.reconciliation.enabled=true
+transmission.reconciliation.interval-ms=600000
+transmission.reconciliation.threshold-minutes=30
+
+# Saga 補償交易 Outbox 排程 (BL-002)
+transmission.compensation.enabled=true
+transmission.compensation.interval-ms=60000
+transmission.compensation.max-retries=5
 ```
+
+---
+
+## 架構手冊與維護指南文件庫 (Documentation Index)
+
+專案詳細架構設計、安全性與生產維運手冊統一歸檔於 `doc/maintainance/` 目錄：
+
+| 手冊名稱 | 檔案路徑 | 核心內容與涵蓋範圍 |
+| :--- | :--- | :--- |
+| **檔案傳輸最終一致性與補償機制指南** | [`EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md`](doc/maintainance/EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md) | **[BL-002] 核心機制**：兩階段暫存與更名 (2PC)、Saga 補償 Outbox 表、背景對帳自癒引擎、樂觀鎖衝突自癒與生產監控 SQL。 |
+| **同步 vs 非同步長任務架構指南** | [`SYNC_VS_ASYNC_TRANSMISSION_GUIDE.md`](doc/maintainance/SYNC_VS_ASYNC_TRANSMISSION_GUIDE.md) | Mode 1 (非同步長任務 202 Accepted) 與 Mode 2 (同步傳輸 200 OK) 之執行緒模型、逾時風險與適用場景對比矩陣。 |
+| **憑證金庫與 AES-GCM 金鑰手冊** | [`CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md`](doc/maintainance/CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md) | 遠端密碼、SSH 私鑰與內部 AES-GCM 加密主金鑰（AEAD 防竄改與隨機 IV）的定位差異與加解密生命週期。 |
+| **傳輸協定客戶端技術剖析指南** | [`TRANSMISSION_CLIENTS_ANALYSIS_GUIDE.md`](doc/maintainance/TRANSMISSION_CLIENTS_ANALYSIS_GUIDE.md) | FTP (Commons Net)、FTPS (PROT P 加密) 與 SFTP (JSch SSH2) 底層連線池、被動模式穿透與遞迴目錄處理。 |
+| **系統安全性維護指南** | [`SECURITY_MAINTENANCE_GUIDE.md`](doc/maintainance/SECURITY_MAINTENANCE_GUIDE.md) | 憑證軟刪除復原機制、全域防禦、審計軌跡保護與安全加固建議。 |
+

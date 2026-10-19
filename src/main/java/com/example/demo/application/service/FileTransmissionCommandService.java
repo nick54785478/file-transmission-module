@@ -12,20 +12,23 @@ import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTaskSchedulerPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
+import com.example.demo.application.port.out.TransmissionCompensationStoragePort;
 import com.example.demo.application.shared.command.DownloadFileCommand;
 import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
 import com.example.demo.application.shared.exception.FileTransmissionException;
+import com.example.demo.application.shared.vo.CompensationAction;
+import com.example.demo.application.shared.vo.CompensationTask;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.SyncDirection;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
 import java.util.Objects;
-
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -43,6 +46,10 @@ import org.springframework.stereotype.Service;
  *       透過 <code>FileTransmissionGatewayPort</code> 執行遠端傳輸閘道協定操作，
  *       透過 <code>FileTransmissionTrackerPort</code> 委派傳輸作業全程生命週期追蹤 (Tracker) 與審計紀錄，
  *       透過 <code>FileTransmissionTaskSchedulerPort</code> 輸出埠委派長任務背景非同步排程，達成 100% 零技術框架侵入。</li>
+ *   <li><b>兩階段提交模擬 (2PC Staging & Atomic Commit)：</b>
+ *       上傳檔案時一律先串流寫入遠端隱藏暫存檔 (.staging)，校驗大小與完整性後透過原子 rename 切換為正式檔名，杜絕下游讀取到半截殘檔。</li>
+ *   <li><b>Saga 補償交易 (Compensation Outbox)：</b>
+ *       傳輸失敗時自動發起即時刪除清理；若即時清理失敗，自動將補償任務寫入 Outbox 補償日誌表由背景排程指數退避重試。</li>
  * </ul>
  * </p>
  */
@@ -61,6 +68,7 @@ public class FileTransmissionCommandService implements
     private final FileTransmissionTrackerPort fileTransmissionTrackerPort;
     private final FileTransmissionTaskSchedulerPort fileTransmissionTaskSchedulerPort;
     private final CredentialCipherPort credentialCipherPort;
+    private final TransmissionCompensationStoragePort transmissionCompensationStoragePort;
 
     /**
      * 向下相容建構子 (3 參數版本)：維持既有單元測試完全相容
@@ -74,7 +82,24 @@ public class FileTransmissionCommandService implements
             FileTransmissionTrackerPort fileTransmissionTrackerPort,
             FileTransmissionTaskSchedulerPort fileTransmissionTaskSchedulerPort
     ) {
-        this(fileTransmissionGatewayPort, fileTransmissionTrackerPort, fileTransmissionTaskSchedulerPort, CredentialCipherPort.NOOP);
+        this(fileTransmissionGatewayPort, fileTransmissionTrackerPort, fileTransmissionTaskSchedulerPort, CredentialCipherPort.NOOP, null);
+    }
+
+    /**
+     * 向下相容建構子 (4 參數版本)：注入憑證加解密埠
+     *
+     * @param fileTransmissionGatewayPort 檔案傳輸通訊閘道輸出埠
+     * @param fileTransmissionTrackerPort 檔案傳輸生命週期追蹤輸出埠
+     * @param fileTransmissionTaskSchedulerPort 檔案傳輸任務非同步排程輸出埠
+     * @param credentialCipherPort 憑證機密加解密輸出埠
+     */
+    public FileTransmissionCommandService(
+            FileTransmissionGatewayPort fileTransmissionGatewayPort,
+            FileTransmissionTrackerPort fileTransmissionTrackerPort,
+            FileTransmissionTaskSchedulerPort fileTransmissionTaskSchedulerPort,
+            CredentialCipherPort credentialCipherPort
+    ) {
+        this(fileTransmissionGatewayPort, fileTransmissionTrackerPort, fileTransmissionTaskSchedulerPort, credentialCipherPort, null);
     }
 
     /**
@@ -84,26 +109,30 @@ public class FileTransmissionCommandService implements
      * @param fileTransmissionTrackerPort 檔案傳輸生命週期追蹤輸出埠
      * @param fileTransmissionTaskSchedulerPort 檔案傳輸任務非同步排程輸出埠
      * @param credentialCipherPort 憑證機密加解密輸出埠
+     * @param transmissionCompensationStoragePort Saga 補償儲存輸出埠
      */
     @Autowired
     public FileTransmissionCommandService(
             FileTransmissionGatewayPort fileTransmissionGatewayPort,
             FileTransmissionTrackerPort fileTransmissionTrackerPort,
             FileTransmissionTaskSchedulerPort fileTransmissionTaskSchedulerPort,
-            CredentialCipherPort credentialCipherPort
+            CredentialCipherPort credentialCipherPort,
+            @Autowired(required = false) TransmissionCompensationStoragePort transmissionCompensationStoragePort
     ) {
         this.fileTransmissionGatewayPort = Objects.requireNonNull(fileTransmissionGatewayPort, "fileTransmissionGatewayPort 不能為空");
         this.fileTransmissionTrackerPort = Objects.requireNonNull(fileTransmissionTrackerPort, "fileTransmissionTrackerPort 不能為空");
         this.fileTransmissionTaskSchedulerPort = Objects.requireNonNull(fileTransmissionTaskSchedulerPort, "fileTransmissionTaskSchedulerPort 不能為空");
         this.credentialCipherPort = Objects.requireNonNull(credentialCipherPort, "credentialCipherPort 不能為空");
+        this.transmissionCompensationStoragePort = transmissionCompensationStoragePort;
     }
 
     @Override
-    public FileTransmissionGottenResult uploadFile(UploadFileCommand command) {
+    public FileUploadGottenResult uploadFile(UploadFileCommand command) {
         // 對傳輸伺服器配置中的機密憑證 (登入密碼與 SSH 私鑰 Passphrase) 進行解密
         TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
 
+        RemoteFilePath stagingFilePath = null;
         try {
             LocalFilePath localFile = command.localFilePath();
             if (!localFile.exists() || !localFile.isFile()) {
@@ -116,14 +145,30 @@ public class FileTransmissionCommandService implements
                     ? command.filename().trim()
                     : localFile.getFileName();
 
-            // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+            String stagingFileName = "." + fileName + ".staging." + trackingId;
             RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
+            stagingFilePath = command.remotePath().resolve(stagingFileName);
+
+            // Phase 1 (STAGING): 串流寫入至暫存檔名 (.staging)
+            fileTransmissionTrackerPort.recordStaging(trackingId, stagingFilePath.getValue());
+            fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), stagingFileName);
+
+            // Phase 2 (VERIFYING): 校驗遠端暫存檔存在性與大小
+            fileTransmissionTrackerPort.recordVerifying(trackingId);
+            if (!fileTransmissionGatewayPort.existsFile(effectiveConfig, stagingFilePath)) {
+                throw new FileTransmissionException("遠端暫存檔校驗失敗：檔案不存在 (" + stagingFilePath.getValue() + ")");
+            }
+            long remoteSize = fileTransmissionGatewayPort.getRemoteFileSize(effectiveConfig, stagingFilePath);
+            if (remoteSize >= 0 && remoteSize != fileSize) {
+                throw new FileTransmissionException("遠端暫存檔大小校驗失敗：預期 " + fileSize + " bytes，但遠端為 " + remoteSize + " bytes");
+            }
+
+            // Phase 3 (COMMITTING): 歸檔備份既有正式檔案並原子更名
+            fileTransmissionTrackerPort.recordCommitting(trackingId);
             archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+            fileTransmissionGatewayPort.moveFile(effectiveConfig, stagingFilePath, targetFilePath);
 
-            // 呼叫 Outbound Port 執行實際通訊閘道傳輸
-            fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), fileName);
-
-            // 透過 Outbound Port 記錄追蹤成功並獲取傳輸結果 DTO
+            // 成功終態：透過 Outbound Port 記錄追蹤成功並獲取傳輸結果 DTO
             return fileTransmissionTrackerPort.recordUploadSuccess(
                     trackingId,
                     localFile,
@@ -132,34 +177,52 @@ public class FileTransmissionCommandService implements
                     fileSize
             );
         } catch (Exception ex) {
+            cleanUpStagingOrCompensate(effectiveConfig, stagingFilePath, trackingId, ex.getMessage());
             fileTransmissionTrackerPort.recordFailure(trackingId, ex.getMessage());
             throw new FileTransmissionException("上傳檔案失敗: " + ex.getMessage(), ex);
         }
     }
 
     @Override
-    public FileTransmissionGottenResult uploadFileFromMemory(UploadFileFromMemoryCommand command) {
+    public FileUploadGottenResult uploadFileFromMemory(UploadFileFromMemoryCommand command) {
         TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
 
+        RemoteFilePath stagingFilePath = null;
         try {
             byte[] content = command.fileContent();
             long fileSize = content.length;
             String fileName = command.filename();
 
-            // 若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+            String stagingFileName = "." + fileName + ".staging." + trackingId;
             RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
-            archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+            stagingFilePath = command.remotePath().resolve(stagingFileName);
 
-            // 呼叫 Outbound Port 執行實際通訊閘道傳輸 (Zero Disk I/O 記憶體直傳)
+            // Phase 1 (STAGING): 記憶體位元組直接串流寫入至遠端暫存檔 (.staging)
+            fileTransmissionTrackerPort.recordStaging(trackingId, stagingFilePath.getValue());
             fileTransmissionGatewayPort.uploadFromMemory(
                     effectiveConfig,
                     content,
                     command.remotePath(),
-                    fileName
+                    stagingFileName
             );
 
-            // 透過 Outbound Port 記錄追蹤成功並獲取傳輸結果 DTO
+            // Phase 2 (VERIFYING): 校驗遠端暫存檔存在性與大小
+            fileTransmissionTrackerPort.recordVerifying(trackingId);
+            if (!fileTransmissionGatewayPort.existsFile(effectiveConfig, stagingFilePath)) {
+                throw new FileTransmissionException("遠端暫存檔校驗失敗：檔案不存在 (" + stagingFilePath.getValue() + ")");
+            }
+            long remoteSize = fileTransmissionGatewayPort.getRemoteFileSize(effectiveConfig, stagingFilePath);
+            if (remoteSize >= 0 && remoteSize != fileSize) {
+                throw new FileTransmissionException("遠端暫存檔大小校驗失敗：預期 " + fileSize + " bytes，但遠端為 " + remoteSize + " bytes");
+            }
+
+            // Phase 3 (COMMITTING): 歸檔備份既有正式檔案並原子更名
+            fileTransmissionTrackerPort.recordCommitting(trackingId);
+            archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+            fileTransmissionGatewayPort.moveFile(effectiveConfig, stagingFilePath, targetFilePath);
+
+            // 成功終態：透過 Outbound Port 記錄追蹤成功並獲取傳輸結果 DTO
             return fileTransmissionTrackerPort.recordUploadSuccess(
                     trackingId,
                     null,
@@ -168,6 +231,7 @@ public class FileTransmissionCommandService implements
                     fileSize
             );
         } catch (Exception ex) {
+            cleanUpStagingOrCompensate(effectiveConfig, stagingFilePath, trackingId, ex.getMessage());
             fileTransmissionTrackerPort.recordFailure(trackingId, ex.getMessage());
             throw new FileTransmissionException("記憶體檔案上傳失敗: " + ex.getMessage(), ex);
         }
@@ -179,6 +243,7 @@ public class FileTransmissionCommandService implements
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
 
         fileTransmissionTaskSchedulerPort.schedule(() -> {
+            RemoteFilePath stagingFilePath = null;
             try {
                 LocalFilePath localFile = command.localFilePath();
                 if (!localFile.exists() || !localFile.isFile()) {
@@ -190,14 +255,32 @@ public class FileTransmissionCommandService implements
                         ? command.filename().trim()
                         : localFile.getFileName();
 
-                // 依據方案 A 策略：若遠端目標檔案已存在，先自動將既有檔案歸檔備份至 .bak，確保最新版維持標準檔名
+                String stagingFileName = "." + fileName + ".staging." + trackingId;
                 RemoteFilePath targetFilePath = command.remotePath().resolve(fileName);
-                archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+                stagingFilePath = command.remotePath().resolve(stagingFileName);
 
-                // 上傳本機檔案至遠端伺服器指定目錄
-                fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), fileName);
+                // Phase 1 (STAGING)
+                fileTransmissionTrackerPort.recordStaging(trackingId, stagingFilePath.getValue());
+                fileTransmissionGatewayPort.upload(effectiveConfig, localFile, command.remotePath(), stagingFileName);
+
+                // Phase 2 (VERIFYING)
+                fileTransmissionTrackerPort.recordVerifying(trackingId);
+                if (!fileTransmissionGatewayPort.existsFile(effectiveConfig, stagingFilePath)) {
+                    throw new FileTransmissionException("遠端暫存檔校驗失敗：檔案不存在 (" + stagingFilePath.getValue() + ")");
+                }
+                long remoteSize = fileTransmissionGatewayPort.getRemoteFileSize(effectiveConfig, stagingFilePath);
+                if (remoteSize >= 0 && remoteSize != fileSize) {
+                    throw new FileTransmissionException("遠端暫存檔大小校驗失敗：預期 " + fileSize + " bytes，但遠端為 " + remoteSize + " bytes");
+                }
+
+                // Phase 3 (COMMITTING)
+                fileTransmissionTrackerPort.recordCommitting(trackingId);
+                archiveExistingRemoteFile(effectiveConfig, targetFilePath);
+                fileTransmissionGatewayPort.moveFile(effectiveConfig, stagingFilePath, targetFilePath);
+
                 fileTransmissionTrackerPort.recordUploadSuccess(trackingId, localFile, command.remotePath(), fileName, fileSize);
             } catch (Exception ex) {
+                cleanUpStagingOrCompensate(effectiveConfig, stagingFilePath, trackingId, ex.getMessage());
                 fileTransmissionTrackerPort.recordFailure(trackingId, ex.getMessage());
             }
         });
@@ -211,7 +294,7 @@ public class FileTransmissionCommandService implements
     }
 
     @Override
-    public FileTransmissionGottenResult downloadFile(DownloadFileCommand command) {
+    public FileDownloadGottenResult downloadFile(DownloadFileCommand command) {
         TransmissionServerConfig effectiveConfig = credentialCipherPort.decryptServerConfig(command.serverConfig());
         String trackingId = fileTransmissionTrackerPort.startTracking(effectiveConfig);
 
@@ -346,6 +429,72 @@ public class FileTransmissionCommandService implements
         if (fileTransmissionGatewayPort.existsFile(config, targetFilePath)) {
             RemoteFilePath backupPath = targetFilePath.toBackupPath();
             fileTransmissionGatewayPort.moveFile(config, targetFilePath, backupPath);
+        }
+    }
+
+    /**
+     * 傳輸失敗時發起即時清理暫存檔；若即時清理失敗則持久化至 Saga 補償 Outbox 表
+     *
+     * @param config 傳輸伺服器配置
+     * @param stagingFilePath 遠端暫存檔路徑
+     * @param trackingId 傳輸追蹤作業識別碼
+     * @param originalError 原始失敗錯誤訊息
+     */
+    private void cleanUpStagingOrCompensate(
+            TransmissionServerConfig config,
+            RemoteFilePath stagingFilePath,
+            String trackingId,
+            String originalError
+    ) {
+        if (stagingFilePath == null) {
+            return;
+        }
+        try {
+            if (fileTransmissionGatewayPort.existsFile(config, stagingFilePath)) {
+                boolean deleted = fileTransmissionGatewayPort.deleteFile(config, stagingFilePath);
+                if (deleted) {
+                    log.info("[即時補償] 傳輸失敗後已成功清理遠端暫存檔: trackingId={}, path={}",
+                            trackingId, stagingFilePath.getValue());
+                    return;
+                }
+            }
+        } catch (Exception cleanupEx) {
+            log.warn("[即時補償] 清理遠端暫存檔異常: {}", cleanupEx.getMessage());
+        }
+
+        // 即時補償未成功 (可能因網路中斷或遠端逾時)，寫入本地補償 Outbox 表由背景重試
+        recordCompensationOutbox(trackingId, config, stagingFilePath.getValue(), originalError);
+    }
+
+    /**
+     * 將補償任務持久化至本地補償日誌表 (Saga Compensation Outbox)
+     *
+     * @param trackingId 傳輸追蹤識別碼
+     * @param serverConfig 伺服器連線配置
+     * @param remoteStagingPath 遠端暫存檔案完整路徑
+     * @param failureReason 初始傳輸失敗原因
+     */
+    private void recordCompensationOutbox(
+            String trackingId,
+            TransmissionServerConfig serverConfig,
+            String remoteStagingPath,
+            String failureReason
+    ) {
+        if (transmissionCompensationStoragePort != null) {
+            try {
+                CompensationTask task = CompensationTask.createPending(
+                        trackingId,
+                        CompensationAction.DELETE_REMOTE_STAGING,
+                        serverConfig,
+                        remoteStagingPath,
+                        failureReason
+                );
+                transmissionCompensationStoragePort.saveCompensation(task);
+                log.info("[Saga 補償 Outbox] 已持久化待補償清理任務: trackingId={}, path={}",
+                        trackingId, remoteStagingPath);
+            } catch (Exception ex) {
+                log.error("[Saga 補償 Outbox] 持久化補償日誌失敗: {}", ex.getMessage(), ex);
+            }
         }
     }
 }

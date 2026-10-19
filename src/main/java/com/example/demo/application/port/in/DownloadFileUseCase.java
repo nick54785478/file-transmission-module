@@ -1,7 +1,7 @@
 package com.example.demo.application.port.in;
 
 import com.example.demo.application.shared.command.DownloadFileCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 
 /**
  * 下載檔案使用案例介面 (DownloadFileUseCase - Inbound Port)
@@ -16,7 +16,7 @@ public interface DownloadFileUseCase {
      * 執行檔案下載作業
      *
      * @param command 下載命令參數
-     * @return 傳輸執行結果 DTO
+     * @return 檔案下載專屬結果 DTO (FileDownloadGottenResult)
      */
-    FileTransmissionGottenResult downloadFile(DownloadFileCommand command);
+    FileDownloadGottenResult downloadFile(DownloadFileCommand command);
 }

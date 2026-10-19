@@ -1,6 +1,6 @@
 package com.example.demo.application.port.in;
 
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import java.util.Optional;
 
@@ -11,7 +11,7 @@ import java.util.Optional;
  * <ul>
  *   <li>命名規範: <code>in : ... + UseCase</code> (AGENTS.md 3-8)。</li>
  *   <li>接收 {@link GetTransmissionStatusQuery}，依據 trackingId 查詢傳輸作業之即時或歷史狀態。</li>
- *   <li>回傳封裝 {@link FileTransmissionGottenResult} 之 Optional 物件。</li>
+ *   <li>回傳封裝 {@link TransmissionStatusGottenResult} 之 Optional 物件。</li>
  * </ul>
  * </p>
  */
@@ -23,5 +23,5 @@ public interface GetTransmissionStatusUseCase {
      * @param query 查詢條件物件
      * @return 傳輸階段結果物件 Optional (若查無資料則為 empty)
      */
-    Optional<FileTransmissionGottenResult> getTransmissionStatus(GetTransmissionStatusQuery query);
+    Optional<TransmissionStatusGottenResult> getTransmissionStatus(GetTransmissionStatusQuery query);
 }

@@ -87,6 +87,11 @@ class SubmitAsyncTransmissionUseCaseTest {
         );
 
         when(fileTransmissionTrackerPort.startTracking(config)).thenReturn("task-async-001");
+        String stagingName = ".upload.txt.staging.task-async-001";
+        RemoteFilePath stagingPath = RemoteFilePath.of("/remote/data/" + stagingName);
+        RemoteFilePath targetPath = RemoteFilePath.of("/remote/data/upload.txt");
+        when(fileTransmissionGatewayPort.existsFile(eq(config), eq(stagingPath))).thenReturn(true);
+        when(fileTransmissionGatewayPort.getRemoteFileSize(eq(config), eq(stagingPath))).thenReturn(Files.size(tempFile));
 
         FileTransmissionSubmittedResult result = commandService.submitUploadFile(command);
 
@@ -96,8 +101,9 @@ class SubmitAsyncTransmissionUseCaseTest {
         assertEquals("IN_PROGRESS", result.status());
         assertNotNull(result.submittedAt());
 
-        // 驗證背景執行緒已觸發 Gateway 與 Tracker
-        verify(fileTransmissionGatewayPort).upload(eq(config), any(), any(), eq("upload.txt"));
+        // 驗證背景執行緒已觸發 2PC 暫存上傳、原子更名與 Tracker 記錄
+        verify(fileTransmissionGatewayPort).upload(eq(config), any(), any(), eq(stagingName));
+        verify(fileTransmissionGatewayPort).moveFile(eq(config), eq(stagingPath), eq(targetPath));
         verify(fileTransmissionTrackerPort).recordUploadSuccess(eq("task-async-001"), any(), any(), eq("upload.txt"), anyLong());
 
         Files.deleteIfExists(tempFile);

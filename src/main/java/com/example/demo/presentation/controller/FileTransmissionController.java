@@ -14,8 +14,10 @@ import com.example.demo.application.shared.command.SyncDirectoryCommand;
 import com.example.demo.application.shared.command.UploadFileCommand;
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import com.example.demo.presentation.assembler.TransmissionResourceAssembler;
 import com.example.demo.presentation.resource.in.DownloadFileResource;
@@ -211,7 +213,7 @@ public class FileTransmissionController {
     @PostMapping("/upload")
     public ResponseEntity<FileUploadedResource> upload(@Valid @RequestBody UploadFileResource resource) {
         UploadFileCommand command = resourceAssembler.toCommand(resource);
-        FileTransmissionGottenResult result = uploadFileUseCase.uploadFile(command);
+        FileUploadGottenResult result = uploadFileUseCase.uploadFile(command);
         FileUploadedResource response = resourceAssembler.toUploadedResource(result);
         return ResponseEntity.ok(response);
     }
@@ -274,7 +276,7 @@ public class FileTransmissionController {
         UploadFileFromMemoryCommand command = resourceAssembler.toCommand(effectiveResource, file);
 
         // 3. 呼叫 UseCase 業務流程並轉換為 Response 資源
-        FileTransmissionGottenResult result = uploadFileFromMemoryUseCase.uploadFileFromMemory(command);
+        FileUploadGottenResult result = uploadFileFromMemoryUseCase.uploadFileFromMemory(command);
         FileUploadedResource response = resourceAssembler.toUploadedResource(result);
         return ResponseEntity.ok(response);
     }
@@ -299,7 +301,7 @@ public class FileTransmissionController {
     @PostMapping("/download")
     public ResponseEntity<FileDownloadedResource> download(@Valid @RequestBody DownloadFileResource resource) {
         DownloadFileCommand command = resourceAssembler.toCommand(resource);
-        FileTransmissionGottenResult result = downloadFileUseCase.downloadFile(command);
+        FileDownloadGottenResult result = downloadFileUseCase.downloadFile(command);
         FileDownloadedResource response = resourceAssembler.toDownloadedResource(result);
         return ResponseEntity.ok(response);
     }
@@ -393,7 +395,7 @@ public class FileTransmissionController {
             @PathVariable("trackingId") @NotBlank(message = "傳輸作業追蹤唯一識別碼 (trackingId) 不能為空") String trackingId
     ) {
         GetTransmissionStatusQuery query = GetTransmissionStatusQuery.of(trackingId);
-        Optional<FileTransmissionGottenResult> statusOpt = getTransmissionStatusUseCase.getTransmissionStatus(query);
+        Optional<TransmissionStatusGottenResult> statusOpt = getTransmissionStatusUseCase.getTransmissionStatus(query);
 
         return statusOpt
                 .map(resourceAssembler::toStatusResource)

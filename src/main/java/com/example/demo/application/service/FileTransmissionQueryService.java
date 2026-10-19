@@ -6,7 +6,7 @@ import com.example.demo.application.port.in.ListRemoteFilesUseCase;
 import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.query.GetTransmissionStatusQuery;
 import com.example.demo.application.shared.query.ListRemoteFilesQuery;
 import com.example.demo.application.shared.view.RemoteFileGottenView;
@@ -79,7 +79,7 @@ public class FileTransmissionQueryService implements ListRemoteFilesUseCase, Get
     }
 
     @Override
-    public Optional<FileTransmissionGottenResult> getTransmissionStatus(GetTransmissionStatusQuery query) {
+    public Optional<TransmissionStatusGottenResult> getTransmissionStatus(GetTransmissionStatusQuery query) {
         return fileTransmissionTrackerPort.getTransmissionStatus(query.trackingId());
     }
 }

@@ -3,10 +3,12 @@ package com.example.demo.application.service;
 import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
+import com.example.demo.application.port.out.TransmissionCompensationStoragePort;
 import com.example.demo.application.shared.command.UploadFileFromMemoryCommand;
-import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
 import com.example.demo.application.shared.exception.FileTransmissionException;
-import com.example.demo.application.shared.vo.LocalFilePath;
+import com.example.demo.application.shared.vo.CompensationAction;
+import com.example.demo.application.shared.vo.CompensationTask;
 import com.example.demo.application.shared.vo.RemoteFilePath;
 import com.example.demo.application.shared.vo.TransmissionProtocol;
 import com.example.demo.application.shared.vo.TransmissionServerConfig;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -25,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doNothing;
@@ -35,9 +39,10 @@ import static org.mockito.Mockito.when;
 /**
  * 記憶體檔案直傳使用案例測試 (UploadFileFromMemoryUseCaseTest)
  * <p>
- * 遵循測試規範 (AGENTS.md 第 5 節)：
- * 1. 涵蓋 UseCase 正常業務流程、錯誤異常分支與憑證解密驗證；
- * 2. 測試方法均撰寫 Gherkin 語法 Javadoc (Feature, Scenario, Given-When-Then)。
+ * 遵循測試規範：
+ * 1. 涵蓋 UseCase 正常業務流程與錯誤異常分支驗證；
+ * 2. 測試方法均撰寫 Gherkin 語法 Javadoc (Feature, Scenario, Given-When-Then)；
+ * 3. 驗證 BL-002 零磁碟落盤之 2PC 暫存與原子提交機制。
  * </p>
  */
 @ExtendWith(MockitoExtension.class)
@@ -49,6 +54,9 @@ class UploadFileFromMemoryUseCaseTest {
     @Mock
     private FileTransmissionTrackerPort fileTransmissionTrackerPort;
 
+    @Mock
+    private TransmissionCompensationStoragePort compensationStoragePort;
+
     private FileTransmissionCommandService commandService;
 
     @BeforeEach
@@ -56,19 +64,21 @@ class UploadFileFromMemoryUseCaseTest {
         commandService = new FileTransmissionCommandService(
                 fileTransmissionGatewayPort,
                 fileTransmissionTrackerPort,
-                Runnable::run
+                Runnable::run,
+                CredentialCipherPort.NOOP,
+                compensationStoragePort
         );
     }
 
     /**
-     * Feature: 記憶體檔案直傳業務流程
-     * Scenario: 成功將記憶體位元組資料透過 SFTP 直傳至遠端伺服器 (Zero Disk I/O)
-     * Given: 準備有效之連線配置、記憶體 byte[] 陣列與遠端目錄路徑
+     * Feature: 記憶體檔案直傳業務流程 (兩階段提交模擬)
+     * Scenario: 成功將記憶體 byte[] 串流透過 SFTP 經由 .staging 暫存檔、校驗與原子更名直傳至遠端
+     * Given: 準備有效之連線配置、記憶體 byte[] 與目標遠端路徑
      * When: 執行 UploadFileFromMemoryUseCase 的 uploadFileFromMemory 方法
-     * Then: Outbound Port uploadFromMemory 成功被呼叫、回傳狀態為 COMPLETED 之結果 DTO
+     * Then: 串流寫入 .staging、校驗大小、發送 moveFile 原子更名並回傳 COMPLETED 結果
      */
     @Test
-    @DisplayName("情境：成功直傳記憶體檔案資料至遠端目的地")
+    @DisplayName("情境：成功直傳記憶體檔案資料至遠端目的地 (2PC Staging & Atomic Commit)")
     void testUploadFileFromMemorySuccess() {
         byte[] content = "Direct Memory Upload Content".getBytes(StandardCharsets.UTF_8);
 
@@ -90,14 +100,21 @@ class UploadFileFromMemoryUseCaseTest {
         when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
                 .thenReturn("track-mem-123");
 
+        String stagingName = ".memory-file.txt.staging.track-mem-123";
+        RemoteFilePath stagingPath = RemoteFilePath.of("/remote/data/" + stagingName);
+        RemoteFilePath targetPath = RemoteFilePath.of("/remote/data/memory-file.txt");
+
         doNothing().when(fileTransmissionGatewayPort).uploadFromMemory(
                 eq(serverConfig),
                 eq(content),
                 eq(RemoteFilePath.of("/remote/data")),
-                eq("memory-file.txt")
+                eq(stagingName)
         );
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(stagingPath))).thenReturn(true);
+        when(fileTransmissionGatewayPort.getRemoteFileSize(eq(serverConfig), eq(stagingPath))).thenReturn((long) content.length);
+
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "track-mem-123",
                 "SFTP",
                 "COMPLETED",
@@ -117,7 +134,7 @@ class UploadFileFromMemoryUseCaseTest {
                 eq((long) content.length)
         )).thenReturn(mockResult);
 
-        FileTransmissionGottenResult result = commandService.uploadFileFromMemory(command);
+        FileUploadGottenResult result = commandService.uploadFileFromMemory(command);
 
         assertNotNull(result);
         assertEquals("COMPLETED", result.status());
@@ -126,13 +143,13 @@ class UploadFileFromMemoryUseCaseTest {
         assertEquals("<memory>", result.sourcePath());
         assertEquals(content.length, result.fileSizeBytes());
 
-        verify(fileTransmissionTrackerPort).startTracking(eq(serverConfig));
-        verify(fileTransmissionGatewayPort).uploadFromMemory(
-                eq(serverConfig),
-                eq(content),
-                eq(RemoteFilePath.of("/remote/data")),
-                eq("memory-file.txt")
-        );
+        // 驗證 2PC 階段追蹤調用
+        verify(fileTransmissionTrackerPort).recordStaging(eq("track-mem-123"), eq(stagingPath.getValue()));
+        verify(fileTransmissionTrackerPort).recordVerifying(eq("track-mem-123"));
+        verify(fileTransmissionTrackerPort).recordCommitting(eq("track-mem-123"));
+
+        // 驗證原子更名與成功審計
+        verify(fileTransmissionGatewayPort).moveFile(eq(serverConfig), eq(stagingPath), eq(targetPath));
         verify(fileTransmissionTrackerPort).recordUploadSuccess(
                 eq("track-mem-123"),
                 isNull(),
@@ -144,20 +161,20 @@ class UploadFileFromMemoryUseCaseTest {
 
     /**
      * Feature: 記憶體檔案直傳業務流程
-     * Scenario: 遠端傳輸閘道發生異常時應中斷流程、記錄 Tracker 失敗並拋出領域例外
-     * Given: Outbound Port uploadFromMemory 拋出連線失敗例外
-     * When: 執行 UploadFileFromMemoryUseCase 的 uploadFileFromMemory 方法
-     * Then: 捕獲 FileTransmissionException 且驗證 Tracker 記錄失敗訊息
+     * Scenario: 遠端通訊發生異常時拋出 FileTransmissionException 並記錄追蹤失敗
+     * Given: 傳輸閘道拋出底層通訊異常
+     * When: 執行 uploadFileFromMemory 方法
+     * Then: 捕獲並包裝為 FileTransmissionException，並通知 Tracker 記錄失敗
      */
     @Test
-    @DisplayName("情境：傳輸閘道異常時記錄失敗並拋出例外")
-    void testUploadFileFromMemoryFailure() {
-        byte[] content = "Failure Test Content".getBytes(StandardCharsets.UTF_8);
+    @DisplayName("情境：傳輸閘道發生異常時拋出 FileTransmissionException")
+    void testUploadFileFromMemoryGatewayThrowsException() {
+        byte[] content = "Error Content".getBytes(StandardCharsets.UTF_8);
 
         TransmissionServerConfig serverConfig = TransmissionServerConfig.of(
                 "192.168.1.100",
-                22,
-                TransmissionProtocol.SFTP,
+                21,
+                TransmissionProtocol.FTP,
                 "testuser",
                 "testpass"
         );
@@ -166,35 +183,26 @@ class UploadFileFromMemoryUseCaseTest {
                 serverConfig,
                 content,
                 RemoteFilePath.of("/remote/data"),
-                "fail-file.txt"
+                "fail-mem.txt"
         );
 
-        when(fileTransmissionTrackerPort.startTracking(eq(serverConfig)))
-                .thenReturn("track-mem-fail-999");
+        when(fileTransmissionTrackerPort.startTracking(any())).thenReturn("track-mem-fail");
 
-        doThrow(new RuntimeException("Connection timed out"))
-                .when(fileTransmissionGatewayPort).uploadFromMemory(
-                        eq(serverConfig),
-                        eq(content),
-                        eq(RemoteFilePath.of("/remote/data")),
-                        eq("fail-file.txt")
-                );
+        doThrow(new RuntimeException("連線失敗"))
+                .when(fileTransmissionGatewayPort)
+                .uploadFromMemory(any(), any(), any(), any());
 
-        FileTransmissionException ex = assertThrows(
-                FileTransmissionException.class,
-                () -> commandService.uploadFileFromMemory(command)
-        );
+        assertThrows(FileTransmissionException.class, () -> commandService.uploadFileFromMemory(command));
 
-        assertTrue(ex.getMessage().contains("Connection timed out"));
-        verify(fileTransmissionTrackerPort).recordFailure(eq("track-mem-fail-999"), any());
+        verify(fileTransmissionTrackerPort).recordFailure(eq("track-mem-fail"), any());
     }
 
     /**
-     * Feature: 記憶體檔案直傳憑證安全解密
-     * Scenario: 命令攜帶 ENC(...) 密文密碼時透過 CredentialCipherPort 解密後執行傳輸
-     * Given: 包含 ENC(...) 密文之 TransmissionServerConfig
+     * Feature: 記憶體檔案直傳機密憑證自動解密
+     * Scenario: 當命令配置帶有 ENC(...) 密文時，自動解密為明文傳遞至 Gateway
+     * Given: 包含 ENC(...) 密文密碼之配置
      * When: 執行 uploadFileFromMemory
-     * Then: 傳遞給 Gateway 之配置已被解密為明文
+     * Then: Gateway 收到之配置包含解密後的明文密碼
      */
     @Test
     @DisplayName("情境：上傳時自動解密 ENC(...) 密文憑證")
@@ -206,7 +214,8 @@ class UploadFileFromMemoryUseCaseTest {
                 fileTransmissionGatewayPort,
                 fileTransmissionTrackerPort,
                 Runnable::run,
-                realCipher
+                realCipher,
+                compensationStoragePort
         );
 
         byte[] content = "Secret Content".getBytes(StandardCharsets.UTF_8);
@@ -226,7 +235,10 @@ class UploadFileFromMemoryUseCaseTest {
         );
 
         when(fileTransmissionTrackerPort.startTracking(any())).thenReturn("track-cipher-1");
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        when(fileTransmissionGatewayPort.existsFile(any(), any())).thenReturn(true);
+        when(fileTransmissionGatewayPort.getRemoteFileSize(any(), any())).thenReturn((long) content.length);
+
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "track-cipher-1",
                 "SFTP",
                 "COMPLETED",
@@ -240,18 +252,20 @@ class UploadFileFromMemoryUseCaseTest {
         when(fileTransmissionTrackerPort.recordUploadSuccess(any(), isNull(), any(), any(), anyLong()))
                 .thenReturn(mockResult);
 
-        FileTransmissionGottenResult result = serviceWithCipher.uploadFileFromMemory(command);
+        FileUploadGottenResult result = serviceWithCipher.uploadFileFromMemory(command);
 
         assertNotNull(result);
         assertEquals("COMPLETED", result.status());
 
         // 驗證傳給 Gateway 的密碼已被解密為明文
+        ArgumentCaptor<TransmissionServerConfig> cfgCaptor = ArgumentCaptor.forClass(TransmissionServerConfig.class);
         verify(fileTransmissionGatewayPort).uploadFromMemory(
-                org.mockito.ArgumentMatchers.argThat(cfg -> "PlainSecretPassword".equals(cfg.password())),
+                cfgCaptor.capture(),
                 eq(content),
                 eq(RemoteFilePath.of("/secure")),
-                eq("secret.txt")
+                anyString()
         );
+        assertEquals("PlainSecretPassword", cfgCaptor.getValue().password());
     }
 
     /**
@@ -285,11 +299,15 @@ class UploadFileFromMemoryUseCaseTest {
                 .thenReturn("track-mem-archive");
 
         RemoteFilePath expectedTargetFilePath = RemoteFilePath.of("/remote/data/archive-mem.txt");
-        // 模擬遠端目標檔案已存在
-        when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedTargetFilePath)))
-                .thenReturn(true);
+        String stagingName = ".archive-mem.txt.staging.track-mem-archive";
+        RemoteFilePath stagingPath = RemoteFilePath.of("/remote/data/" + stagingName);
 
-        FileTransmissionGottenResult mockResult = new FileTransmissionGottenResult(
+        // 模擬遠端 staging 檔案與既有正式檔案皆存在
+        when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(stagingPath))).thenReturn(true);
+        when(fileTransmissionGatewayPort.existsFile(eq(serverConfig), eq(expectedTargetFilePath))).thenReturn(true);
+        when(fileTransmissionGatewayPort.getRemoteFileSize(eq(serverConfig), eq(stagingPath))).thenReturn((long) content.length);
+
+        FileUploadGottenResult mockResult = new FileUploadGottenResult(
                 "track-mem-archive",
                 "SFTP",
                 "COMPLETED",
@@ -309,7 +327,7 @@ class UploadFileFromMemoryUseCaseTest {
                 eq((long) content.length)
         )).thenReturn(mockResult);
 
-        FileTransmissionGottenResult result = commandService.uploadFileFromMemory(command);
+        FileUploadGottenResult result = commandService.uploadFileFromMemory(command);
 
         assertNotNull(result);
         assertEquals("COMPLETED", result.status());
@@ -318,7 +336,7 @@ class UploadFileFromMemoryUseCaseTest {
         verify(fileTransmissionGatewayPort).existsFile(eq(serverConfig), eq(expectedTargetFilePath));
 
         // 驗證呼叫 moveFile 將原檔案改名為備份路徑 (.bak)
-        org.mockito.ArgumentCaptor<RemoteFilePath> backupPathCaptor = org.mockito.ArgumentCaptor.forClass(RemoteFilePath.class);
+        ArgumentCaptor<RemoteFilePath> backupPathCaptor = ArgumentCaptor.forClass(RemoteFilePath.class);
         verify(fileTransmissionGatewayPort).moveFile(
                 eq(serverConfig),
                 eq(expectedTargetFilePath),
@@ -327,12 +345,11 @@ class UploadFileFromMemoryUseCaseTest {
         assertTrue(backupPathCaptor.getValue().getValue().startsWith("/remote/data/archive-mem_"));
         assertTrue(backupPathCaptor.getValue().getValue().endsWith(".bak"));
 
-        // 驗證呼叫 uploadFromMemory 直傳新版本
-        verify(fileTransmissionGatewayPort).uploadFromMemory(
+        // 驗證呼叫 moveFile 將暫存檔切換為正式檔名
+        verify(fileTransmissionGatewayPort).moveFile(
                 eq(serverConfig),
-                eq(content),
-                eq(RemoteFilePath.of("/remote/data")),
-                eq("archive-mem.txt")
+                eq(stagingPath),
+                eq(expectedTargetFilePath)
         );
     }
 }

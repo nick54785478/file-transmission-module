@@ -108,4 +108,9 @@ public class FileTransmissionGatewayAdapter implements FileTransmissionGatewayPo
     public void moveFile(TransmissionServerConfig config, RemoteFilePath sourcePath, RemoteFilePath targetPath) {
         clientFactory.getClient(config.getProtocol()).moveFile(config, sourcePath, targetPath);
     }
+
+    @Override
+    public long getRemoteFileSize(TransmissionServerConfig config, RemoteFilePath remoteFilePath) {
+        return clientFactory.getClient(config.getProtocol()).getRemoteFileSize(config, remoteFilePath);
+    }
 }

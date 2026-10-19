@@ -1,8 +1,11 @@
 package com.example.demo.application.assembler;
 
 import com.example.demo.application.shared.dto.DirectorySyncGottenResult;
+import com.example.demo.application.shared.dto.FileDownloadGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionGottenResult;
 import com.example.demo.application.shared.dto.FileTransmissionSubmittedResult;
+import com.example.demo.application.shared.dto.FileUploadGottenResult;
+import com.example.demo.application.shared.dto.TransmissionStatusGottenResult;
 import com.example.demo.application.shared.view.RemoteFileGottenView;
 import com.example.demo.application.shared.vo.LocalFilePath;
 import com.example.demo.application.shared.vo.RemoteFileInfo;
@@ -27,7 +30,7 @@ import java.util.stream.Collectors;
 public class TransmissionDtoAssembler {
 
     /**
-     * 組裝檔案上傳結果資料傳輸物件 (FileTransmissionGottenResult)
+     * 組裝檔案上傳結果資料傳輸物件 (FileUploadGottenResult)
      *
      * @param transmissionId 傳輸作業唯一識別碼
      * @param protocol 通訊協定名稱字串
@@ -38,9 +41,9 @@ public class TransmissionDtoAssembler {
      * @param fileSize 檔案大小位元組
      * @param durationMillis 傳輸耗時 (毫秒)
      * @param errorMessage 錯誤描述訊息 (若成功則為 null)
-     * @return FileTransmissionGottenResult
+     * @return FileUploadGottenResult
      */
-    public static FileTransmissionGottenResult toUploadResult(
+    public static FileUploadGottenResult toUploadResult(
             String transmissionId,
             String protocol,
             String status,
@@ -51,7 +54,7 @@ public class TransmissionDtoAssembler {
             long durationMillis,
             String errorMessage
     ) {
-        return new FileTransmissionGottenResult(
+        return new FileUploadGottenResult(
                 transmissionId,
                 protocol,
                 status,
@@ -65,7 +68,7 @@ public class TransmissionDtoAssembler {
     }
 
     /**
-     * 組裝檔案下載結果資料傳輸物件 (FileTransmissionGottenResult)
+     * 組裝檔案下載結果資料傳輸物件 (FileDownloadGottenResult)
      *
      * @param transmissionId 傳輸作業唯一識別碼
      * @param protocol 通訊協定名稱字串
@@ -76,9 +79,9 @@ public class TransmissionDtoAssembler {
      * @param fileSize 檔案大小位元組
      * @param durationMillis 傳輸耗時 (毫秒)
      * @param errorMessage 錯誤描述訊息 (若成功則為 null)
-     * @return FileTransmissionGottenResult
+     * @return FileDownloadGottenResult
      */
-    public static FileTransmissionGottenResult toDownloadResult(
+    public static FileDownloadGottenResult toDownloadResult(
             String transmissionId,
             String protocol,
             String status,
@@ -89,7 +92,7 @@ public class TransmissionDtoAssembler {
             long durationMillis,
             String errorMessage
     ) {
-        return new FileTransmissionGottenResult(
+        return new FileDownloadGottenResult(
                 transmissionId,
                 protocol,
                 status,
@@ -144,7 +147,45 @@ public class TransmissionDtoAssembler {
     }
 
     /**
-     * 組裝通用傳輸狀態查詢結果 (FileTransmissionGottenResult)
+     * 組裝傳輸狀態查詢結果資料傳輸物件 (TransmissionStatusGottenResult)
+     *
+     * @param transmissionId 傳輸作業識別碼
+     * @param protocol 通訊協定
+     * @param status 傳輸狀態
+     * @param sourcePath 來源路徑字串
+     * @param targetPath 目標路徑字串
+     * @param fileName 檔案名稱或操作描述
+     * @param fileSize 檔案大小位元組
+     * @param durationMillis 耗時毫秒
+     * @param errorMessage 錯誤訊息
+     * @return TransmissionStatusGottenResult
+     */
+    public static TransmissionStatusGottenResult toStatusResult(
+            String transmissionId,
+            String protocol,
+            String status,
+            String sourcePath,
+            String targetPath,
+            String fileName,
+            long fileSize,
+            long durationMillis,
+            String errorMessage
+    ) {
+        return new TransmissionStatusGottenResult(
+                transmissionId,
+                protocol,
+                status,
+                sourcePath != null ? sourcePath : "",
+                targetPath != null ? targetPath : "",
+                fileName != null ? fileName : "",
+                fileSize,
+                durationMillis,
+                errorMessage
+        );
+    }
+
+    /**
+     * 組裝通用傳輸狀態查詢結果 (相容舊呼叫)
      *
      * @param transmissionId 傳輸作業識別碼
      * @param protocol 通訊協定
@@ -157,6 +198,7 @@ public class TransmissionDtoAssembler {
      * @param errorMessage 錯誤訊息
      * @return FileTransmissionGottenResult
      */
+    @Deprecated
     public static FileTransmissionGottenResult toGottenResult(
             String transmissionId,
             String protocol,
