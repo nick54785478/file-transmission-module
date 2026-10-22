@@ -139,12 +139,12 @@ public class ServerCredentialController {
         return ResponseEntity.ok(resourceAssembler.toRetrievedResource(result));
     }
 
-    @Operation(summary = "查詢所有憑證或依條件搜尋", description = "列出已註冊憑證；可傳入 keyword 模糊搜尋或以 active 過濾啟用/軟刪除狀態")
+    @Operation(summary = "查詢所有憑證或依條件搜尋", description = "列出已註冊憑證；可傳入 keyword 模糊搜尋或以 active (Y/N) 過濾啟用/軟刪除狀態")
     @GetMapping
     public ResponseEntity<List<ServerCredentialRetrievedResource>> listCredentials(
             @Parameter(description = "搜尋關鍵字 (選填)") @RequestParam(required = false) String keyword,
-            @Parameter(description = "啟用狀態過濾 (選填，true=僅查詢啟用, false=僅查詢停用/軟刪除, 未提供=全量查詢)") @RequestParam(required = false) Boolean active) {
-        ListServerCredentialsQuery query = new ListServerCredentialsQuery(keyword, active);
+            @Parameter(description = "啟用狀態過濾 (選填，Y=僅查詢啟用, N=僅查詢停用/軟刪除, 未提供=全量查詢)") @RequestParam(required = false) String active) {
+        ListServerCredentialsQuery query = resourceAssembler.toListQuery(keyword, active);
         List<ServerCredentialGottenResult> results = listServerCredentialsUseCase.listCredentials(query);
         return ResponseEntity.ok(resourceAssembler.toRetrievedResourceList(results));
     }

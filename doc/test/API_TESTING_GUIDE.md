@@ -393,6 +393,16 @@ curl.exe -X POST "http://localhost:8080/api/transmission/upload/file" `
 
 ---
 
+#### 【TC-14-1】依啟用狀態 (active) 或關鍵字過濾查詢憑證
+* **端點**：
+  * 查詢所有啟用中憑證：`GET /api/credentials?active=Y`
+  * 查詢已軟刪除/停用憑證：`GET /api/credentials?active=N`
+  * 複合關鍵字查詢：`GET /api/credentials?keyword=sftp&active=Y`
+* **參數說明**：`active` 支援前端傳入 `Y` 或 `N` (不分大小寫，亦相容 `true`/`false`)；未傳入則查詢全量憑證。
+* **預期結果 (HTTP 200 OK)**：回傳符合過濾條件的憑證清單。
+
+---
+
 ## 4. 自動化測試腳本 (PowerShell Automated Runner)
 
 專案提供了一鍵執行的自動化測試腳本，自動涵蓋 TC-01 ~ TC-15 端對端驗證：

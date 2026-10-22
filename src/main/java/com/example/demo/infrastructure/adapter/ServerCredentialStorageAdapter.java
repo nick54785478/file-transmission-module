@@ -1,6 +1,5 @@
 package com.example.demo.infrastructure.adapter;
 
-import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.UpdateServerCredentialCommand;
@@ -21,16 +20,10 @@ import java.util.Optional;
  * <p>
  * <b>架構與設計職責說明 (AGENTS.md 2 與 3-9)：</b>
  * <ul>
- *   <li>命名規範: <code>out : ... + Adapter</code>。</li>
- *   <li>實作應用層 Outbound Port ({@link ServerCredentialStoragePort})。</li>
- *   <li>作為連線憑證儲存模組對外出口，協調 <code>ServerCredentialJpaRepository</code> 與 <code>CredentialCipherPort</code>。</li>
- *   <li><b>透明加解密與資安防護：</b>
- *     <ul>
- *       <li>入庫儲存 (Save/Update) 時：自動將明文密碼、SSH 私鑰及 Passphrase 透過 AES-GCM 加密為 <code>ENC(...)</code> 格式密文後落盤。</li>
- *       <li>出庫對外查詢 (Find/Search) 時：提供遮罩脫敏之 DTO ({@link ServerCredentialGottenResult})，杜絕洩漏。</li>
- *       <li>內部傳輸調用 (resolveTransmissionConfig) 時：在記憶體中還原為明文並封裝為 {@link TransmissionServerConfig}，即插即用。</li>
- *     </ul>
- *   </li>
+ * <li>命名規範: <code>out : ... + Adapter</code>。</li>
+ * <li>實作應用層 Outbound Port ({@link ServerCredentialStoragePort})。</li>
+ * <li>作為連線憑證儲存模組對外出口，專責對接並協調 <code>ServerCredentialJpaRepository</code> 執行 JPA 持久化操作。</li>
+ * <li><b>純粹持久化職責：</b> 接收應用層已加密完成之 Command，直接落盤；對外查詢時提供遮罩脫敏之 DTO ({@link ServerCredentialGottenResult})。</li>
  * </ul>
  * </p>
  */
@@ -38,18 +31,11 @@ import java.util.Optional;
 public class ServerCredentialStorageAdapter implements ServerCredentialStoragePort {
 
     private final ServerCredentialJpaRepository serverCredentialJpaRepository;
-    private final CredentialCipherPort credentialCipherPort;
 
-    public ServerCredentialStorageAdapter(ServerCredentialJpaRepository serverCredentialJpaRepository,
-                                         CredentialCipherPort credentialCipherPort) {
+    public ServerCredentialStorageAdapter(ServerCredentialJpaRepository serverCredentialJpaRepository) {
         this.serverCredentialJpaRepository = Objects.requireNonNull(
                 serverCredentialJpaRepository,
-                "serverCredentialJpaRepository 不能為空"
-        );
-        this.credentialCipherPort = Objects.requireNonNull(
-                credentialCipherPort,
-                "credentialCipherPort 不能為空"
-        );
+                "serverCredentialJpaRepository 不能為空");
     }
 
     @Override
@@ -59,10 +45,6 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
             throw new IllegalArgumentException("憑證別名已存在，不可重複使用: " + command.alias());
         }
 
-        String encPassword = encryptIfPresent(command.password());
-        String encPrivateKey = encryptIfPresent(command.privateKey());
-        String encPassphrase = encryptIfPresent(command.passphrase());
-
         ServerCredentialEntity entity = new ServerCredentialEntity(
                 null,
                 command.alias(),
@@ -70,11 +52,10 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
                 command.port(),
                 command.protocol(),
                 command.username(),
-                encPassword,
-                encPrivateKey,
-                encPassphrase,
-                command.description()
-        );
+                command.password(),
+                command.privateKey(),
+                command.passphrase(),
+                command.description());
 
         ServerCredentialEntity saved = serverCredentialJpaRepository.save(entity);
         return toGottenResult(saved);
@@ -86,10 +67,10 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
         ServerCredentialEntity entity = serverCredentialJpaRepository.findById(command.id())
                 .orElseThrow(() -> new IllegalArgumentException("查無指定的伺服器憑證 [ID: " + command.id() + "]"));
 
-        if (command.alias() != null && !command.alias().trim().equalsIgnoreCase(entity.getAlias())) {
-            if (serverCredentialJpaRepository.existsByAlias(command.alias())) {
-                throw new IllegalArgumentException("憑證別名已存在，不可重複使用: " + command.alias());
-            }
+        if (command.alias() != null
+                && !command.alias().trim().equalsIgnoreCase(entity.getAlias())
+                && serverCredentialJpaRepository.existsByAlias(command.alias())) {
+            throw new IllegalArgumentException("憑證別名已存在，不可重複使用: " + command.alias());
         }
 
         entity.updateDetails(
@@ -98,17 +79,12 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
                 command.port(),
                 command.protocol(),
                 command.username(),
-                command.description()
-        );
+                command.description());
 
-        String newEncPassword = command.password() != null ? encryptIfPresent(command.password()) : null;
-        String newEncPrivateKey = command.privateKey() != null ? encryptIfPresent(command.privateKey()) : null;
-        String newEncPassphrase = command.passphrase() != null ? encryptIfPresent(command.passphrase()) : null;
-
-        entity.updateEncryptedSecrets(newEncPassword, newEncPrivateKey, newEncPassphrase);
+        entity.updateEncryptedSecrets(command.password(), command.privateKey(), command.passphrase());
 
         if (command.active() != null) {
-            if (command.active()) {
+            if (Boolean.TRUE.equals(command.active())) {
                 entity.activate();
             } else {
                 entity.deactivate();
@@ -150,10 +126,6 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
         }
 
         return entityOpt.filter(ServerCredentialEntity::isActive).map(entity -> {
-            String plainPassword = decryptIfPresent(entity.getEncryptedPassword());
-            String plainPrivateKey = decryptIfPresent(entity.getEncryptedPrivateKey());
-            String plainPassphrase = decryptIfPresent(entity.getEncryptedPassphrase());
-
             TransmissionProtocol protocol = resolveProtocol(entity.getProtocol());
             int port = (entity.getPort() != null && entity.getPort() > 0)
                     ? entity.getPort()
@@ -164,31 +136,43 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
                     port,
                     protocol,
                     entity.getUsername(),
-                    plainPassword,
+                    entity.getEncryptedPassword(),
                     10000,
                     true,
                     false,
-                    plainPrivateKey,
-                    plainPassphrase
-            );
+                    entity.getEncryptedPrivateKey(),
+                    entity.getEncryptedPassphrase());
         });
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ServerCredentialGottenResult> findAll() {
-        return serverCredentialJpaRepository.findAll().stream()
-                .map(this::toGottenResult)
-                .toList();
+        return findAllCredentials();
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ServerCredentialGottenResult> search(String keyword) {
         if (keyword == null || keyword.trim().isEmpty()) {
-            return findAll();
+            return findAllCredentials();
         }
         return serverCredentialJpaRepository.searchByKeyword(keyword.trim()).stream()
+                .map(this::toGottenResult)
+                .toList();
+    }
+
+    /**
+     * 查詢所有連線憑證並封裝為遮罩結果物件清單。
+     * <p>
+     * 抽離為內部輔助方法以避免在 {@code search(keyword)} 中經由 {@code this} 直接調用帶有 {@code @Transactional} 的 {@code findAll()} 方法，
+     * 避免繞過 Spring AOP Proxy 導致事務傳播失效 (SonarQube S6809)。
+     * </p>
+     *
+     * @return 脫敏後的伺服器憑證結果物件清單
+     */
+    private List<ServerCredentialGottenResult> findAllCredentials() {
+        return serverCredentialJpaRepository.findAll().stream()
                 .map(this::toGottenResult)
                 .toList();
     }
@@ -239,30 +223,13 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
         return toGottenResult(saved);
     }
 
-    // --- 內部加解密與遮罩轉換輔助邏輯 ---
-
-    private String encryptIfPresent(String plainOrEnc) {
-        if (plainOrEnc == null || plainOrEnc.trim().isEmpty()) {
-            return null;
-        }
-        String trimmed = plainOrEnc.trim();
-        if (credentialCipherPort.isEncrypted(trimmed)) {
-            return trimmed;
-        }
-        return credentialCipherPort.encrypt(trimmed);
-    }
-
-    private String decryptIfPresent(String encryptedText) {
-        if (encryptedText == null || encryptedText.trim().isEmpty()) {
-            return null;
-        }
-        return credentialCipherPort.decryptIfEncrypted(encryptedText.trim());
-    }
+    // --- 內部遮罩轉換輔助邏輯 ---
 
     private ServerCredentialGottenResult toGottenResult(ServerCredentialEntity entity) {
         boolean hasPass = entity.getEncryptedPassword() != null && !entity.getEncryptedPassword().trim().isEmpty();
         boolean hasKey = entity.getEncryptedPrivateKey() != null && !entity.getEncryptedPrivateKey().trim().isEmpty();
-        boolean hasPassphrase = entity.getEncryptedPassphrase() != null && !entity.getEncryptedPassphrase().trim().isEmpty();
+        boolean hasPassphrase = entity.getEncryptedPassphrase() != null
+                && !entity.getEncryptedPassphrase().trim().isEmpty();
 
         String maskedPassword = hasPass ? "******" : null;
         String maskedKey = hasKey ? "[SSH_PRIVATE_KEY_CONFIGURED]" : null;
@@ -284,8 +251,7 @@ public class ServerCredentialStorageAdapter implements ServerCredentialStoragePo
                 entity.isActive(),
                 entity.getDescription(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt()
-        );
+                entity.getUpdatedAt());
     }
 
     private static TransmissionProtocol resolveProtocol(String protocolStr) {

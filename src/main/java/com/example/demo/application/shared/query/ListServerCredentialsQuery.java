@@ -40,4 +40,36 @@ public record ListServerCredentialsQuery(
     public static ListServerCredentialsQuery of(String keyword, Boolean active) {
         return new ListServerCredentialsQuery(keyword, active);
     }
+
+    /**
+     * 支援以狀態字串代碼 ("Y" / "N", "true" / "false") 建構查詢物件
+     *
+     * @param keyword      搜尋關鍵字 (選填)
+     * @param activeStatus 狀態代碼字串 ("Y", "N", "true", "false", 選填)
+     * @return 查詢物件 ListServerCredentialsQuery
+     */
+    public static ListServerCredentialsQuery ofStatus(String keyword, String activeStatus) {
+        return new ListServerCredentialsQuery(keyword, parseActive(activeStatus));
+    }
+
+    /**
+     * 安全解析啟用狀態字串 (支援 Y / N, true / false, 1 / 0)
+     *
+     * @param statusStr 狀態代碼字串
+     * @return 解析後之 Boolean，若輸入為 null 或空白字串則回傳 null (代表全量不限狀態)
+     * @throws IllegalArgumentException 當輸入無法識別之狀態字串時拋出
+     */
+    public static Boolean parseActive(String statusStr) {
+        if (statusStr == null || statusStr.trim().isEmpty()) {
+            return null;
+        }
+        String trimmed = statusStr.trim().toUpperCase();
+        if ("Y".equals(trimmed) || "TRUE".equals(trimmed) || "1".equals(trimmed) || "YES".equals(trimmed)) {
+            return Boolean.TRUE;
+        }
+        if ("N".equals(trimmed) || "FALSE".equals(trimmed) || "0".equals(trimmed) || "NO".equals(trimmed)) {
+            return Boolean.FALSE;
+        }
+        throw new IllegalArgumentException("未知的生效狀態代碼: [" + statusStr + "] (僅支援 'Y' 或 'N')");
+    }
 }

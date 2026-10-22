@@ -124,11 +124,14 @@ public class CredentialCipherAdapter implements CredentialCipherPort {
         }
 
         String decryptedPassword = decryptIfEncrypted(serverConfig.getPassword());
+        String decryptedPrivateKey = (serverConfig.hasPrivateKey())
+                ? decryptIfEncrypted(serverConfig.getPrivateKey())
+                : null;
         String decryptedPassphrase = (serverConfig.hasPassphrase())
                 ? decryptIfEncrypted(serverConfig.getPassphrase())
                 : null;
 
-        return serverConfig.withDecryptedCredentials(decryptedPassword, decryptedPassphrase);
+        return serverConfig.withDecryptedCredentials(decryptedPassword, decryptedPrivateKey, decryptedPassphrase);
     }
 
     /**

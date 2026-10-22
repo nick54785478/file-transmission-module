@@ -1,5 +1,6 @@
 package com.example.demo.application.service;
 
+import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.DeleteServerCredentialCommand;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -18,6 +20,7 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,6 +35,9 @@ class ServerCredentialCommandServiceTest {
 
     @Mock
     private ServerCredentialStoragePort serverCredentialStoragePort;
+
+    @Mock
+    private CredentialCipherPort credentialCipherPort;
 
     private ServerCredentialCommandService commandService;
 
@@ -233,5 +239,131 @@ class ServerCredentialCommandServiceTest {
         assertThat(actual.active()).isTrue();
         assertThat(actual.alias()).isEqualTo("sftp-reactivated");
         verify(serverCredentialStoragePort).reactivateById("cred-to-reactivate");
+    }
+
+    /**
+     * Feature: 伺服器傳輸憑證管理
+     * Scenario: 建立憑證時調用加解密埠加密明文敏感資訊
+     * Given: 傳入含有明文密碼、SSH 私鑰及通行碼之 CreateServerCredentialCommand，並裝配真實/Mock之 CredentialCipherPort
+     * When: 呼叫 createCredential 業務方法
+     * Then: 應用層命令服務主動協調 CredentialCipherPort 加密各敏感欄位，並將包裝後的加密命令傳遞給儲存埠
+     */
+    @Test
+    @DisplayName("情境：建立憑證時主動調用加解密埠加密敏感資訊")
+    void testCreateCredentialEncryptsSecretsWithInjectedCipher() {
+        ServerCredentialCommandService serviceWithCipher =
+                new ServerCredentialCommandService(serverCredentialStoragePort, credentialCipherPort);
+
+        CreateServerCredentialCommand command = new CreateServerCredentialCommand(
+                "sftp-secure",
+                "secure.example.com",
+                22,
+                "SFTP",
+                "deployer",
+                "plain-pass",
+                "plain-key",
+                "plain-phrase",
+                "機密測試憑證"
+        );
+
+        when(credentialCipherPort.isEncrypted("plain-pass")).thenReturn(false);
+        when(credentialCipherPort.encrypt("plain-pass")).thenReturn("ENC(enc-pass)");
+
+        when(credentialCipherPort.isEncrypted("plain-key")).thenReturn(false);
+        when(credentialCipherPort.encrypt("plain-key")).thenReturn("ENC(enc-key)");
+
+        when(credentialCipherPort.isEncrypted("plain-phrase")).thenReturn(false);
+        when(credentialCipherPort.encrypt("plain-phrase")).thenReturn("ENC(enc-phrase)");
+
+        when(serverCredentialStoragePort.save(any(CreateServerCredentialCommand.class))).thenReturn(null);
+
+        serviceWithCipher.createCredential(command);
+
+        ArgumentCaptor<CreateServerCredentialCommand> captor =
+                ArgumentCaptor.forClass(CreateServerCredentialCommand.class);
+        verify(serverCredentialStoragePort).save(captor.capture());
+
+        CreateServerCredentialCommand captured = captor.getValue();
+        assertThat(captured.password()).isEqualTo("ENC(enc-pass)");
+        assertThat(captured.privateKey()).isEqualTo("ENC(enc-key)");
+        assertThat(captured.passphrase()).isEqualTo("ENC(enc-phrase)");
+    }
+
+    /**
+     * Feature: 伺服器傳輸憑證管理
+     * Scenario: 建立憑證時若密碼已為密文則不重複加密 (冪等保護)
+     * Given: 傳入已為 ENC(...) 格式密文之 CreateServerCredentialCommand
+     * When: 呼叫 createCredential 業務方法
+     * Then: 不重複調用 encrypt 方法，直接保留原有密文
+     */
+    @Test
+    @DisplayName("情境：建立憑證時若密碼已為密文則不重複加密")
+    void testCreateCredentialWithAlreadyEncryptedSecretDoesNotReEncrypt() {
+        ServerCredentialCommandService serviceWithCipher =
+                new ServerCredentialCommandService(serverCredentialStoragePort, credentialCipherPort);
+
+        CreateServerCredentialCommand command = new CreateServerCredentialCommand(
+                "sftp-secure",
+                "secure.example.com",
+                22,
+                "SFTP",
+                "deployer",
+                "ENC(already-encrypted-secret)",
+                null,
+                null,
+                "已加密密碼測試"
+        );
+
+        when(credentialCipherPort.isEncrypted("ENC(already-encrypted-secret)")).thenReturn(true);
+        when(serverCredentialStoragePort.save(any(CreateServerCredentialCommand.class))).thenReturn(null);
+
+        serviceWithCipher.createCredential(command);
+
+        verify(credentialCipherPort, never()).encrypt(any());
+
+        ArgumentCaptor<CreateServerCredentialCommand> captor =
+                ArgumentCaptor.forClass(CreateServerCredentialCommand.class);
+        verify(serverCredentialStoragePort).save(captor.capture());
+        assertThat(captor.getValue().password()).isEqualTo("ENC(already-encrypted-secret)");
+    }
+
+    /**
+     * Feature: 伺服器傳輸憑證管理
+     * Scenario: 更新既有憑證時對敏感機密資訊執行加密
+     * Given: 傳入含有明文密碼之 UpdateServerCredentialCommand
+     * When: 呼叫 updateCredential 業務方法
+     * Then: 應用層命令服務調用 CredentialCipherPort 加密後傳遞給儲存埠
+     */
+    @Test
+    @DisplayName("情境：更新既有憑證時主動調用加解密埠加密敏感資訊")
+    void testUpdateCredentialEncryptsSecretsWithInjectedCipher() {
+        ServerCredentialCommandService serviceWithCipher =
+                new ServerCredentialCommandService(serverCredentialStoragePort, credentialCipherPort);
+
+        UpdateServerCredentialCommand command = new UpdateServerCredentialCommand(
+                "cred-101",
+                "sftp-updated",
+                "sftp.example.com",
+                22,
+                "SFTP",
+                "admin",
+                "new-plain-pass",
+                null,
+                null,
+                "更新描述",
+                true
+        );
+
+        when(credentialCipherPort.isEncrypted("new-plain-pass")).thenReturn(false);
+        when(credentialCipherPort.encrypt("new-plain-pass")).thenReturn("ENC(new-enc-pass)");
+        when(serverCredentialStoragePort.update(any(UpdateServerCredentialCommand.class))).thenReturn(null);
+
+        serviceWithCipher.updateCredential(command);
+
+        ArgumentCaptor<UpdateServerCredentialCommand> captor =
+                ArgumentCaptor.forClass(UpdateServerCredentialCommand.class);
+        verify(serverCredentialStoragePort).update(captor.capture());
+
+        assertThat(captor.getValue().password()).isEqualTo("ENC(new-enc-pass)");
     }
 }

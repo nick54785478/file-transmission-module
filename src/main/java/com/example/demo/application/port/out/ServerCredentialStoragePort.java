@@ -23,17 +23,17 @@ import java.util.Optional;
 public interface ServerCredentialStoragePort {
 
     /**
-     * 儲存全新伺服器憑證 (底層自動實施 AES-GCM 密文落盤)
+     * 儲存全新伺服器憑證 (接收已加密之憑證資訊落盤)
      *
-     * @param command 建立命令
+     * @param command 建立命令 (包含加密後之密鑰資訊)
      * @return 遮罩後之憑證查詢結果 DTO
      */
     ServerCredentialGottenResult save(CreateServerCredentialCommand command);
 
     /**
-     * 更新既有伺服器憑證
+     * 更新既有伺服器憑證 (接收已加密之憑證資訊落盤)
      *
-     * @param command 更新命令
+     * @param command 更新命令 (包含加密後之密鑰資訊)
      * @return 遮罩後之憑證查詢結果 DTO
      */
     ServerCredentialGottenResult update(UpdateServerCredentialCommand command);
@@ -55,10 +55,10 @@ public interface ServerCredentialStoragePort {
     Optional<ServerCredentialGottenResult> findByAlias(String alias);
 
     /**
-     * 依憑證 ID 或別名解析並解密為完整的傳輸伺服器配置數值物件
+     * 依憑證 ID 或別名解析伺服器連線配置數值物件
      *
      * @param idOrAlias 憑證 ID 或易讀別名
-     * @return 包含解密後帳號密碼/私鑰之 {@link TransmissionServerConfig} Optional
+     * @return 包含伺服器主機與憑證資訊之 {@link TransmissionServerConfig} Optional
      */
     Optional<TransmissionServerConfig> resolveTransmissionConfig(String idOrAlias);
 

@@ -14,15 +14,19 @@ import com.example.demo.application.shared.dto.ServerCredentialGottenResult;
 import com.example.demo.application.shared.query.GetServerCredentialQuery;
 import com.example.demo.application.shared.query.ListServerCredentialsQuery;
 import com.example.demo.presentation.assembler.ServerCredentialResourceAssembler;
+import com.example.demo.presentation.handler.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 import java.util.List;
@@ -78,7 +82,9 @@ class ServerCredentialControllerTest {
                 reactivateServerCredentialUseCase,
                 resourceAssembler
         );
-        mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
     }
 
     /**
@@ -283,7 +289,7 @@ class ServerCredentialControllerTest {
     /**
      * Feature: 伺服器憑證 REST API 控制器
      * Scenario: GET /api/credentials 支援依 active 狀態過濾查詢憑證
-     * Given: 傳入 active=false 查詢參數
+     * Given: 傳入 active=false 或 active=N 查詢參數
      * When: 發送 GET 請求至 /api/credentials?active=false
      * Then: 控制器構造包含 active=false 之 ListServerCredentialsQuery 並回傳 200 OK
      */
@@ -302,6 +308,76 @@ class ServerCredentialControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].alias").value("inactive-alias"))
                 .andExpect(jsonPath("$[0].active").value(false));
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: GET /api/credentials 支援傳入 active=Y 查詢啟用中憑證
+     * Given: 傳入 active=Y 查詢參數
+     * When: 發送 GET 請求至 /api/credentials?active=Y
+     * Then: 控制器構造包含 active=true 之 ListServerCredentialsQuery 並回傳 200 OK
+     */
+    @Test
+    @DisplayName("情境：GET /api/credentials 帶 active=Y 查詢啟用憑證成功回傳 200")
+    void testListCredentialsWithActiveYEndpointSuccess() throws Exception {
+        ServerCredentialGottenResult activeCred = new ServerCredentialGottenResult(
+                "cred-1", "active-alias", "127.0.0.1", 2222, "SFTP", "tester",
+                "******", null, null, true, false, false, true, "啟用中憑證", Instant.now(), Instant.now()
+        );
+
+        ArgumentCaptor<ListServerCredentialsQuery> queryCaptor =
+                ArgumentCaptor.forClass(ListServerCredentialsQuery.class);
+        when(listServerCredentialsUseCase.listCredentials(queryCaptor.capture()))
+                .thenReturn(List.of(activeCred));
+
+        mockMvc.perform(get("/api/credentials?active=Y"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].alias").value("active-alias"))
+                .andExpect(jsonPath("$[0].active").value(true));
+
+        assertThat(queryCaptor.getValue().active()).isTrue();
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: GET /api/credentials 支援傳入 active=N 查詢停用/軟刪除憑證
+     * Given: 傳入 active=N 查詢參數
+     * When: 發送 GET 請求至 /api/credentials?active=N
+     * Then: 控制器構造包含 active=false 之 ListServerCredentialsQuery 並回傳 200 OK
+     */
+    @Test
+    @DisplayName("情境：GET /api/credentials 帶 active=N 查詢停用憑證成功回傳 200")
+    void testListCredentialsWithActiveNEndpointSuccess() throws Exception {
+        ServerCredentialGottenResult inactiveCred = new ServerCredentialGottenResult(
+                "cred-2", "inactive-alias", "127.0.0.1", 2222, "SFTP", "tester",
+                "******", null, null, true, false, false, false, "已停用憑證", Instant.now(), Instant.now()
+        );
+
+        ArgumentCaptor<ListServerCredentialsQuery> queryCaptor =
+                ArgumentCaptor.forClass(ListServerCredentialsQuery.class);
+        when(listServerCredentialsUseCase.listCredentials(queryCaptor.capture()))
+                .thenReturn(List.of(inactiveCred));
+
+        mockMvc.perform(get("/api/credentials?active=N"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].alias").value("inactive-alias"))
+                .andExpect(jsonPath("$[0].active").value(false));
+
+        assertThat(queryCaptor.getValue().active()).isFalse();
+    }
+
+    /**
+     * Feature: 伺服器憑證 REST API 控制器
+     * Scenario: GET /api/credentials 傳入非法的 active 參數回傳 400 Bad Request
+     * Given: 傳入非法 active 參數 (例如 active=INVALID)
+     * When: 發送 GET 請求至 /api/credentials?active=INVALID
+     * Then: 控制器拋出 IllegalArgumentException，由全域例外處理器攔截回傳 400 Bad Request
+     */
+    @Test
+    @DisplayName("情境：GET /api/credentials 傳入非法 active 參數回傳 400")
+    void testListCredentialsWithInvalidActiveThrows400() throws Exception {
+        mockMvc.perform(get("/api/credentials?active=INVALID"))
+                .andExpect(status().isBadRequest());
     }
 
     /**

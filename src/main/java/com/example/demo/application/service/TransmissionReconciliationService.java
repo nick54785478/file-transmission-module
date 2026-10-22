@@ -1,6 +1,7 @@
 package com.example.demo.application.service;
 
 import com.example.demo.application.port.in.ReconcileTransmissionUseCase;
+import com.example.demo.application.port.out.CredentialCipherPort;
 import com.example.demo.application.port.out.FileTransmissionGatewayPort;
 import com.example.demo.application.port.out.FileTransmissionTrackerPort;
 import com.example.demo.application.port.out.ServerCredentialStoragePort;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
@@ -43,9 +45,10 @@ public class TransmissionReconciliationService implements ReconcileTransmissionU
     private final FileTransmissionTrackerPort trackerPort;
     private final FileTransmissionGatewayPort gatewayPort;
     private final ServerCredentialStoragePort credentialStoragePort;
+    private final CredentialCipherPort credentialCipherPort;
 
     /**
-     * 建構對帳自癒服務並注入輸出埠依賴
+     * 建構對帳自癒服務並注入輸出埠依賴 (相容版本，預設 CredentialCipherPort.NOOP)
      *
      * @param trackerPort 傳輸生命週期追蹤輸出埠
      * @param gatewayPort 傳輸通訊閘道輸出埠
@@ -56,9 +59,28 @@ public class TransmissionReconciliationService implements ReconcileTransmissionU
             FileTransmissionGatewayPort gatewayPort,
             ServerCredentialStoragePort credentialStoragePort
     ) {
+        this(trackerPort, gatewayPort, credentialStoragePort, CredentialCipherPort.NOOP);
+    }
+
+    /**
+     * 建構對帳自癒服務並注入完整輸出埠依賴 (供 Spring 自動裝配)
+     *
+     * @param trackerPort 傳輸生命週期追蹤輸出埠
+     * @param gatewayPort 傳輸通訊閘道輸出埠
+     * @param credentialStoragePort 伺服器憑證儲存輸出埠
+     * @param credentialCipherPort 憑證機密加解密輸出埠
+     */
+    @Autowired
+    public TransmissionReconciliationService(
+            FileTransmissionTrackerPort trackerPort,
+            FileTransmissionGatewayPort gatewayPort,
+            ServerCredentialStoragePort credentialStoragePort,
+            CredentialCipherPort credentialCipherPort
+    ) {
         this.trackerPort = Objects.requireNonNull(trackerPort, "trackerPort 不能為空");
         this.gatewayPort = Objects.requireNonNull(gatewayPort, "gatewayPort 不能為空");
         this.credentialStoragePort = Objects.requireNonNull(credentialStoragePort, "credentialStoragePort 不能為空");
+        this.credentialCipherPort = (credentialCipherPort != null) ? credentialCipherPort : CredentialCipherPort.NOOP;
     }
 
     @Override
@@ -181,7 +203,7 @@ public class TransmissionReconciliationService implements ReconcileTransmissionU
         if (zombie.credentialId() != null && !zombie.credentialId().isBlank()) {
             Optional<TransmissionServerConfig> fromStore = credentialStoragePort.resolveTransmissionConfig(zombie.credentialId());
             if (fromStore.isPresent()) {
-                return fromStore;
+                return fromStore.map(credentialCipherPort::decryptServerConfig);
             }
         }
 

@@ -99,6 +99,18 @@ public record TransmissionServerConfig(
      * @return 包含明文憑證之全新 TransmissionServerConfig 物件實例
      */
     public TransmissionServerConfig withDecryptedCredentials(String decryptedPassword, String decryptedPassphrase) {
+        return withDecryptedCredentials(decryptedPassword, this.privateKey, decryptedPassphrase);
+    }
+
+    /**
+     * 衍生新實例：使用解密後的遠端伺服器連線密碼、SSH 私鑰明文與私鑰通行碼建立新的配置實例 (維持純粹不可變性)
+     *
+     * @param decryptedPassword 解密後之遠端主機登入密碼明文
+     * @param decryptedPrivateKey 解密後之遠端主機 SSH 私鑰明文
+     * @param decryptedPassphrase 解密後之遠端主機 SSH 私鑰通行碼明文
+     * @return 包含明文憑證之全新 TransmissionServerConfig 物件實例
+     */
+    public TransmissionServerConfig withDecryptedCredentials(String decryptedPassword, String decryptedPrivateKey, String decryptedPassphrase) {
         return new TransmissionServerConfig(
                 this.host,
                 this.port,
@@ -108,7 +120,7 @@ public record TransmissionServerConfig(
                 this.timeoutMs,
                 this.passiveMode,
                 this.strictHostKeyChecking,
-                this.privateKey,
+                decryptedPrivateKey,
                 decryptedPassphrase
         );
     }

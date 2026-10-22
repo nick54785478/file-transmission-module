@@ -8,6 +8,7 @@ import com.example.demo.application.shared.query.GetServerCredentialQuery;
 import com.example.demo.application.shared.query.ListServerCredentialsQuery;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -58,11 +59,11 @@ public class ServerCredentialQueryService implements
 
     @Override
     public List<ServerCredentialGottenResult> listCredentials(ListServerCredentialsQuery query) {
-        List<ServerCredentialGottenResult> results;
+        List<ServerCredentialGottenResult> results = new ArrayList<>();
         if (query == null || query.keyword() == null || query.keyword().trim().isEmpty()) {
-            results = serverCredentialStoragePort.findAll();
+            results.addAll(serverCredentialStoragePort.findAll());
         } else {
-            results = serverCredentialStoragePort.search(query.keyword());
+            results.addAll( serverCredentialStoragePort.search(query.keyword()));
         }
 
         if (query != null && query.active() != null) {

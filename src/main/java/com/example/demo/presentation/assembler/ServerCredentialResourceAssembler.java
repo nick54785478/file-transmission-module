@@ -3,6 +3,7 @@ package com.example.demo.presentation.assembler;
 import com.example.demo.application.shared.command.CreateServerCredentialCommand;
 import com.example.demo.application.shared.command.UpdateServerCredentialCommand;
 import com.example.demo.application.shared.dto.ServerCredentialGottenResult;
+import com.example.demo.application.shared.query.ListServerCredentialsQuery;
 import com.example.demo.presentation.resource.in.CreateServerCredentialResource;
 import com.example.demo.presentation.resource.in.UpdateServerCredentialResource;
 import com.example.demo.presentation.resource.out.ServerCredentialRetrievedResource;
@@ -102,5 +103,16 @@ public class ServerCredentialResourceAssembler {
             return Collections.emptyList();
         }
         return results.stream().map(this::toRetrievedResource).toList();
+    }
+
+    /**
+     * 將表現層查詢參數 (包含關鍵字與 "Y"/"N" 狀態代碼) 轉換為應用層查詢物件
+     *
+     * @param keyword 搜尋關鍵字
+     * @param active  狀態字串代碼 ("Y", "N", "true", "false", 選填)
+     * @return 應用層查詢物件 ListServerCredentialsQuery
+     */
+    public ListServerCredentialsQuery toListQuery(String keyword, String active) {
+        return ListServerCredentialsQuery.ofStatus(keyword, active);
     }
 }
