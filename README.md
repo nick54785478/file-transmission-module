@@ -367,6 +367,7 @@ transmission.compensation.max-retries=5
 
 | 手冊名稱 | 檔案路徑 | 核心內容與涵蓋範圍 |
 | :--- | :--- | :--- |
+| **上傳任務同步 vs 非同步與長任務架構指南** | [`UPLOAD_TASK_SYNC_VS_ASYNC_AND_LONG_RUNNING_GUIDE.md`](doc/maintainance/UPLOAD_TASK_SYNC_VS_ASYNC_AND_LONG_RUNNING_GUIDE.md) | 上傳任務非同步 (202 Accepted) 與同步 (200 OK) 之連線執行緒模型、一般任務 (零落盤直傳) 與長任務 (2PC 暫存更名、Saga Outbox 補償、對帳自癒) 之本質區別與選型決策樹。 |
 | **檔案傳輸最終一致性與補償機制指南** | [`EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md`](doc/maintainance/EVENTUAL_CONSISTENCY_AND_COMPENSATION_GUIDE.md) | **[BL-002] 核心機制**：兩階段暫存與更名 (2PC)、Saga 補償 Outbox 表、背景對帳自癒引擎、樂觀鎖衝突自癒與生產監控 SQL。 |
 | **同步 vs 非同步長任務架構指南** | [`SYNC_VS_ASYNC_TRANSMISSION_GUIDE.md`](doc/maintainance/SYNC_VS_ASYNC_TRANSMISSION_GUIDE.md) | Mode 1 (非同步長任務 202 Accepted) 與 Mode 2 (同步傳輸 200 OK) 之執行緒模型、逾時風險與適用場景對比矩陣。 |
 | **憑證金庫與 AES-GCM 金鑰手冊** | [`CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md`](doc/maintainance/CREDENTIAL_AND_AES_KEY_ARCHITECTURE_GUIDE.md) | 遠端密碼、SSH 私鑰與內部 AES-GCM 加密主金鑰（AEAD 防竄改與隨機 IV）的定位差異與加解密生命週期。 |
